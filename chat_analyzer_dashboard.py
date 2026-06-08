@@ -716,7 +716,7 @@ def build_tsv_lookup(tsv_path: str) -> dict:
         if not issue_col or not kw_col:
             return {}
 
-        df[issue_col] = df[issue_col].fillna(method="ffill").str.strip().str.lower()
+        df[issue_col] = df[issue_col].ffill().str.strip().str.lower()  # ffill() replaces deprecated fillna(method="ffill") for pandas 3.x compatibility
         df[kw_col]    = df[kw_col].fillna("").str.strip().str.lower()
 
         lookup = {}
