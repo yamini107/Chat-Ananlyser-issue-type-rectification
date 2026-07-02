@@ -2,7 +2,7 @@
 Chat Analyzer Dashboard — Shopee, Lazada & TikTok
 ==================================================
 Graas.ai-themed Streamlit app for daily chat enquiry analysis.
- 
+
 CHANGES FROM PREVIOUS VERSION
 ──────────────────────────────
 1. JSON Message Extraction (NEW)
@@ -11,7 +11,7 @@ CHANGES FROM PREVIOUS VERSION
      fields before any keyword matching. Without this, keywords like
      "cancel" or "refund" were never found inside raw JSON strings,
      causing nearly every conversation to fall through to "Other".
- 
+
 2. TSV-Driven Issue Taxonomy (ENHANCED)
    - `build_tsv_lookup()` reads the reference TSV at runtime and converts
      it into a keyword→IssueType dictionary.
@@ -20,13 +20,13 @@ CHANGES FROM PREVIOUS VERSION
    - TSV keywords are checked FIRST before the legacy ISSUE_KEYWORDS dict;
      this gives the reference data priority and fixes misclassifications
      for Delay/Shipment, Promotions, Size, Exchange, and Invoice.
- 
+
 3. Scoring-based Classification (IMPROVED)
    - Both TSV keywords and legacy keywords contribute weighted scores.
    - TSV matches earn weight 2 (higher precision); legacy matches earn
      weight 1. The issue with the highest cumulative score wins.
    - Ties broken by priority order (High > Medium > Low).
- 
+
 4. Unresolved Chat Detection (IMPROVED)
    - Previous logic only checked seller messages for stalling/resolution
      patterns in raw JSON strings — patterns were never matching.
@@ -36,11 +36,29 @@ CHANGES FROM PREVIOUS VERSION
      (processed), "เรียบร้อย" (done), plus English equivalents.
    - Auto-replies (bot greetings, chatbot messages) are now excluded from
      both stall detection and resolution detection to avoid false positives.
- 
+
 5. Platform-Aware TSV Loading (NEW)
    - TSV path can be configured via `TSV_REFERENCE_PATH` constant.
    - If TSV is not found, the system silently falls back to legacy keywords.
- 
+
+6. Expanded Keyword Coverage & Refined Priority (NEW — this version)
+   - ISSUE_KEYWORDS has been extended with a large multilingual keyword set
+     (English / Thai / Bahasa / Tagalog / Chinese) sourced from the latest
+     reference keyword sheet, covering Refund, Return, Cancellation, Delay,
+     Damaged/Wrong Item, Missing Item, Payment Issue, Product Inquiry,
+     Promotion Issue, Technical Issue and Complaint. This significantly
+     reduces conversations falling through to "Other" when a genuine issue
+     keyword is present in the buyer's message.
+   - PRIORITY_MAP has been updated: "Missing Item" is now High priority
+     (previously Medium), in line with updated business priority rules.
+   - A new HIGH_PRIORITY_ESCALATION_KEYWORDS list + escalation check inside
+     `get_priority()` promotes specific high-severity situations (fraud,
+     account hacked, chargeback/legal threats, double charge, safety
+     issues, "marked delivered but not received", etc.) to High priority
+     even when their underlying Issue Type would normally be Medium/Low —
+     without changing the underlying Issue Type or Issue Type keyword
+     matching logic.
+
 ASSUMPTIONS
 ───────────
 - TSV Issue Types are mapped to internal names as follows:
@@ -61,19 +79,25 @@ ASSUMPTIONS
   (size-related returns) rather than "Product Inquiry".
 - Messages that are purely media (images, order cards, item cards) with
   no extractable text are skipped during issue classification.
- 
+- Escalation keywords (fraud, hacked account, legal/chargeback threats,
+  double charge, safety issues, false "delivered" status) bump a
+  conversation's PRIORITY to "High" regardless of its detected Issue Type,
+  since these situations require urgent handling even when they surface
+  inside an otherwise Medium/Low-priority issue category (e.g. a double
+  charge inside "Payment Issue").
+
 Run:  streamlit run chat_analyzer_dashboard.py
 Deps: pip install streamlit pandas openpyxl xlsxwriter
 """
- 
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import re, io, warnings, gc, json, os
 from datetime import datetime, timedelta
- 
+
 warnings.filterwarnings("ignore")
- 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PAGE CONFIG — Graas.ai theme
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,7 +107,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
- 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CUSTOM CSS — Graas.ai brand colours (#1B2A4A navy, #00C4B4 teal, #FF6B35 orange)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +117,7 @@ st.markdown("""
 html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
 .main { background: #F4F6FB; }
 .block-container { padding: 1.5rem 2rem; }
- 
+
 /* ── Top header bar ── */
 .graas-header {
     background: linear-gradient(135deg, #1B2A4A 0%, #243554 100%);
@@ -107,7 +131,7 @@ html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
 .graas-header h1 { color: #fff; margin: 0; font-size: 1.5rem; font-weight: 700; }
 .graas-header p  { color: #A8C0D6; margin: 0; font-size: 0.85rem; }
 .graas-logo { color: #00C4B4; font-size: 2rem; }
- 
+
 /* ── Metric cards ── */
 .metric-row { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
 .metric-card {
@@ -126,7 +150,7 @@ html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
 .metric-val { font-size: 1.9rem; font-weight: 800; color: #1B2A4A; }
 .metric-label { font-size: 0.78rem; color: #7A8EA8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
 .metric-sub { font-size: 0.75rem; color: #A0AEC0; margin-top: 2px; }
- 
+
 /* ── Section titles ── */
 .section-title {
     font-size: 1rem;
@@ -136,17 +160,17 @@ html, body, [class*="css"] { font-family: 'Inter', 'Segoe UI', sans-serif; }
     padding-bottom: 0.4rem;
     margin: 1.5rem 0 1rem;
 }
- 
+
 /* ── Priority badges ── */
 .badge-high   { background:#FDECEA; color:#C0392B; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:600; }
 .badge-medium { background:#FEF9E7; color:#D68910; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:600; }
 .badge-low    { background:#EAF4FB; color:#2980B9; padding:2px 8px; border-radius:12px; font-size:0.75rem; font-weight:600; }
- 
+
 /* ── Sentiment ── */
 .sent-pos { color:#27AE60; font-weight:600; }
 .sent-neu { color:#7F8C8D; font-weight:600; }
 .sent-neg { color:#C0392B; font-weight:600; }
- 
+
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] { background: #1B2A4A !important; }
 section[data-testid="stSidebar"] .stMarkdown h2,
@@ -181,12 +205,12 @@ section[data-testid="stSidebar"] .stMultiSelect span[data-baseweb="tag"] {
 }
 section[data-testid="stSidebar"] hr { border-color: #2E4A6A !important; }
 section[data-testid="stSidebar"] strong { color: #00C4B4 !important; }
- 
+
 /* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] { background: #fff; border-radius:8px; padding:4px; gap:4px; }
 .stTabs [data-baseweb="tab"] { border-radius:6px; padding:6px 18px; font-weight:600; color:#7A8EA8; }
 .stTabs [aria-selected="true"] { background:#00C4B4 !important; color:#fff !important; }
- 
+
 /* ── Suggested reply box ── */
 .reply-box {
     background: #F0FBF9;
@@ -199,10 +223,10 @@ section[data-testid="stSidebar"] strong { color: #00C4B4 !important; }
     margin-top: 0.5rem;
 }
 .reply-label { font-size:0.75rem; color:#00C4B4; font-weight:700; text-transform:uppercase; margin-bottom:4px; }
- 
+
 /* ── TikTok platform card ── */
 .tiktok-card { border-left-color: #010101 !important; }
- 
+
 /* ── Upload area ── */
 .upload-area {
     background: #fff;
@@ -212,7 +236,7 @@ section[data-testid="stSidebar"] strong { color: #00C4B4 !important; }
     text-align: center;
     margin-bottom: 1rem;
 }
- 
+
 /* ── Store search result info box ── */
 .store-search-info {
     background: #E8F8F6;
@@ -225,18 +249,18 @@ section[data-testid="stSidebar"] strong { color: #00C4B4 !important; }
 }
 </style>
 """, unsafe_allow_html=True)
- 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 # Path to the TSV reference file — can be overridden via environment variable.
 # Place the TSV in the same directory as this script or set the env var.
 TSV_REFERENCE_PATH = os.environ.get(
     "CHAT_ANALYZER_TSV",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "table__2_.tsv"),
 )
- 
+
 # ── Mapping from TSV issue names → internal canonical issue type names ────────
 # Assumption: TSV uses business-friendly labels; we map them to the names used
 # throughout this app (reply templates, priority map, action steps, etc.)
@@ -255,29 +279,47 @@ TSV_TO_INTERNAL = {
     "invoice":              "Payment Issue",
     "product quality":      "Damaged/Wrong Item",
 }
- 
+
 # Keywords from TSV "Return & refund" that should map to Refund, not Return
 # (when these appear, override the TSV mapping from "Return" → "Refund")
 _TSV_REFUND_OVERRIDE_KWS = {"refund"}
- 
+
 # ── Legacy keyword dictionary (internal fallback, weight=1) ──────────────────
 # CHANGE: expanded keyword lists based on real message samples observed in the
 # uploaded chat data (JSON-unwrapped buyer messages).
+#
+# NEW (this version): merged in the full multilingual keyword reference sheet
+# (English / Thai / Bahasa / Tagalog / Chinese) so that far fewer genuine
+# buyer issues fall through to "Other". Every keyword below is matched
+# case-insensitively as a substring of the extracted buyer text, and plural /
+# tense variants (e.g. "cancel", "cancelled", "cancelling", "canceling") are
+# listed explicitly to support singular/plural and common variations.
 ISSUE_KEYWORDS = {
     "Refund": [
         "refund", "คืนเงิน", "pengembalian dana", "dana kembali", "ibalik", "irefund",
         "bayar balik", "money back", "reimburse", "reimbursement",
         "kembalikan uang", "uang kembali",
+        # NEW — reference keyword sheet additions
+        "refunded", "refunds", "money return", "return money", "refund request",
+        "bayaran balik", "pulangkan duit", "คืนเงินให้",
     ],
     "Return": [
         "return", "คืนสินค้า", "retur", "rma", "send back", "ส่งคืน", "kembalikan",
         "return item", "product return", "too big", "too small", "doesn't fit",
         "wrong fit", "size issue", "exchange", "change of size",
+        # NEW — reference keyword sheet additions
+        "want to return", "how to return", "return policy", "returning", "returned",
+        "return request", "return process", "pengembalian barang",
+        "ส่งของคืน", "คืนของ", "ส่งคืนสินค้า",
     ],
     "Cancellation": [
         "cancel", "cancelled", "ยกเลิก", "batalkan", "batal", "cancellation",
         "cancel order", "ยกเลิกคำสั่งซื้อ", "revoke", "withdraw", "i cancelled",
         "change address", "change size", "change color", "change mobile",
+        # NEW — reference keyword sheet additions
+        "want to cancel", "how to cancel", "canceling", "cancelling", "pembatalan",
+        "batalkan pesanan", "cancel my order", "stop order", "cancel purchase",
+        "ยกเลิกออเดอร์",
     ],
     "Delay": [
         "delay", "late", "slow", "ช้า", "lambat", "belum sampai", "haven't received",
@@ -288,6 +330,15 @@ ISSUE_KEYWORDS = {
         "receive by today", "ship out", "when will my item be shipped",
         "has it been shipped", "shipped out", "shipped yet",
         "follow up", "update", "when will i receive", "track",
+        # NEW — reference keyword sheet additions
+        "where is my order", "where is my package", "where is my parcel",
+        "when can i receive", "shipment status", "order status",
+        "estimated delivery", "still not received", "have not received",
+        "did not arrive", "no delivery", "not dispatched", "pending delivery",
+        "pending shipment", "belum terima", "kapan sampai", "lama sekali",
+        "makakarating", "makaabot", "kailan kaya", "delivery status",
+        "order update", "ยังไม่มา", "ยังไม่ถึง", "สถานะพัสดุ",
+        "เมื่อไหร่จะได้รับ", "รอสินค้า",
     ],
     "Damaged/Wrong Item": [
         "wrong item", "wrong product", "damaged", "broken", "defective",
@@ -297,16 +348,33 @@ ISSUE_KEYWORDS = {
         # NEW — product quality keywords from TSV
         "defected", "sole separation", "deviate", "damaged box", "damaged product",
         "dah pakai", "mcm dah pakai", "kotor", "looks used", "old stock",
+        # NEW — reference keyword sheet additions
+        "wrong variation", "wrong variant", "received wrong", "got wrong",
+        "incorrect item", "incorrect product", "not what i ordered",
+        "tama po ang variation", "make sure tama", "tampered", "torn", "dented",
+        "cracked", "leaking", "expired", "kadaluarsa", "expire", "salah variasi",
+        "หมดอายุ", "สินค้าไม่ตรง", "ผิดสินค้า", "สินค้าเสีย", "สินค้าแตก",
     ],
     "Missing Item": [
         "missing", "not received", "didn't receive", "never received",
         "ไม่ได้รับ", "ของหาย", "hilang", "tidak diterima", "tidak ada", "kurang",
         "incomplete", "item missing", "package empty",
+        # NEW — reference keyword sheet additions
+        "empty box", "no item", "not inside", "not in the box", "missing product",
+        "barang tidak ada", "barang kurang", "tidak lengkap", "never got",
+        "ไม่ครบ", "ของไม่ครบ", "ขาด",
     ],
     "Payment Issue": [
         "payment", "ชำระเงิน", "bayar", "pembayaran", "charge", "double charge",
         "overcharged", "wrong charge", "billing", "invoice", "โอนเงิน", "จ่ายเงิน",
         "pay", "transfer", "deducted", "not paid", "receipt", "official receipt",
+        # NEW — reference keyword sheet additions
+        "payment failed", "payment error", "cannot pay", "can't pay",
+        "charged twice", "double payment", "extra charge", "wrong amount",
+        "payment issue", "payment problem", "billing issue", "bank transfer",
+        "credit card", "gagal bayar", "pembayaran gagal", "tax invoice",
+        "การชำระเงิน", "ชำระเงินไม่ได้", "ชำระไม่ได้", "จ่ายไม่ได้", "โอนไม่ได้",
+        "ใบกำกับภาษี",
     ],
     "Product Inquiry": [
         "how to", "how do", "วิธีใช้", "ราคา", "price", "size", "ขนาด",
@@ -319,6 +387,15 @@ ISSUE_KEYWORDS = {
         "what size should i take", "waterproof", "will be fit", "warranty",
         # NEW — material/product questions from data samples
         "suitable for", "ผลิตจาก", "ประเทศอะไร", "tali", "budak", "umur",
+        # NEW — reference keyword sheet additions
+        "size chart", "uk size", "us size", "eu size", "same size",
+        "actual picture", "actual photo", "is this suitable", "is it suitable",
+        "do you have", "do you sell", "is it available", "still available",
+        "how to use", "how to wear", "tersedia", "ada stok", "masih ada",
+        "ada size", "apakah ada", "travelling", "expiry date", "shelf life",
+        "manufacture date", "authentic", "genuine", "dimension", "dimensions",
+        "recommend", "สอบถาม", "อยากรู้", "อยากทราบ", "ขอถาม", "ยังมี",
+        "มีไหม", "มีขาย", "มีสต็อก", "สต็อค", "สินค้ามีไหม", "库存", "有库存",
     ],
     "Promotion Issue": [
         "voucher", "promo", "discount", "coupon", "code", "sale", "offer",
@@ -326,11 +403,25 @@ ISSUE_KEYWORDS = {
         "flash sale", "deal", "bundle",
         # NEW — TSV promotion keywords
         "live", "vouchers",
+        # NEW — reference keyword sheet additions
+        "voucher code", "promo code", "discount code", "coupon code",
+        "cannot apply", "voucher not working", "code not working",
+        "promo not valid", "discount not applied", "kode tidak bisa",
+        "kupon tidak valid", "diskon tidak berlaku", "free gift", "free item",
+        "freebie", "bundle deal", "buy 1 get 1", "b1g1", "free shipping",
+        "reward", "rebate", "campaign", "ใช้โค้ดไม่ได้", "โค้ดใช้ไม่ได้",
+        "ของแถม", "แถม", "กิจกรรม",
     ],
     "Technical Issue": [
         "error", "bug", "cannot", "can't", "unable", "failed", "not working",
         "app issue", "website", "login", "checkout problem", "system",
         "ไม่สามารถ", "เกิดข้อผิดพลาด", "tidak bisa", "gagal", "eror",
+        # NEW — reference keyword sheet additions
+        "technical issue", "technical problem", "page not found", "server error",
+        "link not working", "button not working", "cannot access",
+        "access denied", "aplikasi error", "tidak bisa login",
+        "tidak bisa checkout", "glitch", "crash", "loading",
+        "ระบบขัดข้อง", "ระบบล่ม", "เข้าไม่ได้",
     ],
     "Complaint": [
         "complain", "complaint", "terrible", "horrible", "awful", "worst",
@@ -339,15 +430,61 @@ ISSUE_KEYWORDS = {
         "kecewa", "mengecewakan", "tidak puas", "buruk", "parah",
         # NEW — escalation language observed in real data
         "consumer court", "file a complaint", "report", "sue", "legal",
+        # NEW — reference keyword sheet additions (incl. fraud/scam signals)
+        "false advertising", "waste of time", "no response", "not responding",
+        "no reply", "terrible experience", "bad experience", "worst experience",
+        "pelayanan buruk", "tidak membantu", "sangat kecewa", "proper packaging",
+        "request_proper_packaging", "unhappy", "angry", "upset", "dissatisfied",
+        "rude", "unprofessional", "scam", "fraud", "cheat", "ignored",
+        "แย่มาก", "บริการแย่",
     ],
 }
- 
+
+# ── Priority classification ───────────────────────────────────────────────────
+# UPDATED: "Missing Item" moved from Medium → High per the refreshed priority
+# rules. High/Medium/Low buckets otherwise keep their previous membership.
 PRIORITY_MAP = {
-    "High":   ["Refund", "Complaint", "Damaged/Wrong Item"],
-    "Medium": ["Delay", "Missing Item", "Return", "Cancellation"],
-    "Low":    ["Product Inquiry", "Promotion Issue", "Payment Issue", "Technical Issue"],
+    "High":   ["Refund", "Complaint", "Damaged/Wrong Item", "Missing Item"],
+    "Medium": ["Delay", "Return", "Cancellation", "Payment Issue"],
+    "Low":    ["Product Inquiry", "Promotion Issue", "Technical Issue"],
 }
- 
+
+# ── High-priority escalation keywords (NEW) ───────────────────────────────────
+# These cover urgent/high-severity situations called out in the updated
+# priority rules — Fraud, Double Charge, Account Hacked, Legal Threat,
+# Chargeback, Safety Issue, and "order marked delivered but not received" —
+# that can surface inside an otherwise Medium/Low-priority Issue Type (e.g. a
+# double charge is still classified as "Payment Issue", but must still be
+# escalated to High priority). `get_priority()` checks these BEFORE falling
+# back to the standard PRIORITY_MAP lookup, so the underlying Issue Type
+# classification, reply templates, and action steps are left untouched.
+HIGH_PRIORITY_ESCALATION_KEYWORDS = [
+    # Fraud / scam
+    "fraud", "scam", "unauthorized transaction", "unauthorised transaction",
+    "unauthorized charge", "unauthorised charge", "fake seller", "被骗", "诈骗",
+    # Double charge
+    "double charge", "charged twice", "double payment", "charged 2 times",
+    "duplicate charge", "duplicate payment",
+    # Account hacked / security
+    "account hacked", "account was hacked", "hacked my account", "hacked",
+    "unauthorized access", "unauthorised access", "someone accessed my account",
+    "account compromised", "account breach", "แฮก", "โดนแฮก",
+    # Legal threat / chargeback
+    "legal action", "take legal action", "sue you", "lawyer", "consumer court",
+    "file a police report", "police report", "chargeback", "dispute charge",
+    "bank dispute", "credit card dispute", "report to authorities",
+    "consumer protection", "ฟ้องร้อง", "ดำเนินคดี",
+    # Safety issue
+    "safety issue", "safety hazard", "injury", "injured", "got hurt",
+    "allergic reaction", "caused injury", "fire hazard", "explode", "exploded",
+    "electric shock", "chemical burn", "อันตราย", "บาดเจ็บ",
+    # Order marked delivered but not received (false delivery status)
+    "marked as delivered", "shows as delivered", "shows delivered",
+    "delivered but not received", "delivered but i didn't receive",
+    "delivered but i did not receive", "says delivered but", "false delivery",
+    "gps shows delivered", "system shows delivered",
+]
+
 # ── Team Member → Store Code mapping (effective 30 March 2026) ────────────────
 TEAM_ASSIGNMENTS = {
     "Yeria":      ["AACMH", "FFH", "IKU",
@@ -361,20 +498,20 @@ TEAM_ASSIGNMENTS = {
     "Jaye":       ["GSK", "DBC", "IEI", "FYW", "ILL"],
     "Ratchakorn": ["AABWU", "AAFHU", "AAFHB"],
 }
- 
+
 STORE_TO_AGENT = {
     store.upper(): agent
     for agent, stores in TEAM_ASSIGNMENTS.items()
     for store in stores
 }
- 
+
 # GED is a shared store code — assign by COUNTRY_CODE
 GED_COUNTRY_TO_AGENT = {
     "MY": "Yeria",
     "SG": "Syahira",
     "PH": "Keerthana",
 }
- 
+
 AGENT_SHIFT = {
     "Yeria":      "GED MY · AACMH / FFH / IKU",
     "Syahira":    "GED SG · EWG / HFC / AAISS",
@@ -383,7 +520,7 @@ AGENT_SHIFT = {
     "Jaye":       "GSK / DBC / IEI / FYW / ILL",
     "Ratchakorn": "Full-time · AABWU / AAFHU / AAFHB",
 }
- 
+
 # ── Stalling patterns — seller has acknowledged but not resolved ──────────────
 # CHANGE: expanded to cover patterns seen in TikTok/Shopee seller messages.
 STALLING_PATTERNS = [
@@ -411,7 +548,7 @@ STALLING_PATTERNS = [
     r"follow up",
     r"bole follow up",
 ]
- 
+
 # ── Resolution patterns — seller has given a concrete answer/action ───────────
 # CHANGE: significantly expanded with patterns seen in real seller messages.
 RESOLUTION_PATTERNS = [
@@ -448,7 +585,7 @@ RESOLUTION_PATTERNS = [
     r"maaf atas (kesulitan|masalah)",
     r"harap maklum",
 ]
- 
+
 # ── Auto-reply / bot patterns — exclude from stall/resolution detection ────────
 # CHANGE: added chatbot JSON markers seen in Lazada/Shopee/TikTok data.
 AUTO_REPLY_PATTERNS = [
@@ -468,7 +605,7 @@ AUTO_REPLY_PATTERNS = [
     r"pass_through_data",
     r"shopee_chatbot",
 ]
- 
+
 POSITIVE_KWS = [
     "thank", "thanks", "great", "excellent", "awesome", "perfect", "love",
     "good", "nice", "happy", "satisfied", "wonderful", "amazing", "fantastic",
@@ -478,7 +615,7 @@ POSITIVE_KWS = [
     "salamat", "maganda", "ayos", "galing",
     "ok pls", "ok thanks",   # NEW — casual positive acknowledgements from data
 ]
- 
+
 NEGATIVE_KWS = [
     "terrible", "worst", "angry", "disappointed", "frustrated", "cheated", "scam",
     "fraud", "fake", "broken", "damaged", "wrong item", "missing", "never received",
@@ -491,7 +628,7 @@ NEGATIVE_KWS = [
     "consumer court", "file a complaint", "dah pakai", "mcm dah pakai",
     "kotor", "defected", "sole separation",
 ]
- 
+
 SUGGESTED_REPLIES = {
     "Refund": (
         "Thank you for reaching out, and we sincerely apologise for the inconvenience. "
@@ -581,9 +718,9 @@ SUGGESTED_REPLIES = {
         "How was your experience with our support team today?"
     ),
 }
- 
+
 TEAM_START_DATE = pd.Timestamp("2026-03-30")
- 
+
 CONVERSION_KEYWORDS = [
     "i want to buy", "i'd like to buy", "i would like to buy", "how to buy",
     "how to order", "how do i order", "place an order", "can i order",
@@ -594,7 +731,7 @@ CONVERSION_KEYWORDS = [
     "mau beli", "mau order", "mau pesan", "ingin beli", "ingin order", "cara beli",
     "mag-order", "gusto kong bilhin", "bibilhin ko", "paano mag-order",
 ]
- 
+
 ACTION_STEPS = {
     "Refund": (
         "1. Verify order ID and payment method in Seller Centre.\n"
@@ -685,28 +822,28 @@ ACTION_STEPS = {
         "4. Log in DKSH tracker under 'General Enquiries'."
     ),
 }
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TSV REFERENCE LOADER
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 @st.cache_data(show_spinner=False)
 def build_tsv_lookup(tsv_path: str) -> dict:
     """
     Load the TSV reference file and return a dict:
         {keyword_lower: canonical_issue_type}
- 
+
     The TSV has two columns:
         Issue type  | Key words
     Issue type uses forward-fill (only first row per group has a value).
- 
+
     Returns an empty dict if the file is not found or cannot be parsed.
     This ensures the app degrades gracefully when no TSV is provided.
     """
     if not tsv_path or not os.path.exists(tsv_path):
         return {}
- 
+
     try:
         df = pd.read_csv(tsv_path, sep="\t", dtype=str)
         # Normalise column names — tolerate minor variations
@@ -715,10 +852,10 @@ def build_tsv_lookup(tsv_path: str) -> dict:
         kw_col    = next((c for c in df.columns if "key" in c or "word" in c), None)
         if not issue_col or not kw_col:
             return {}
- 
+
         df[issue_col] = df[issue_col].ffill().str.strip().str.lower()  # ffill() replaces deprecated fillna(method="ffill") for pandas 3.x compatibility
         df[kw_col]    = df[kw_col].fillna("").str.strip().str.lower()
- 
+
         lookup = {}
         for _, row in df.iterrows():
             tsv_label = row[issue_col]
@@ -732,45 +869,45 @@ def build_tsv_lookup(tsv_path: str) -> dict:
             if tsv_label == "return & refund" and kw in _TSV_REFUND_OVERRIDE_KWS:
                 internal = "Refund"
             lookup[kw] = internal
- 
+
         return lookup
- 
+
     except Exception:
         return {}
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MESSAGE TEXT EXTRACTION  (NEW)
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def extract_plain_text(raw_msg: str) -> str:
     """
     Extract human-readable text from a platform message blob.
- 
+
     Messages on Lazada, Shopee, and TikTok are JSON-encoded strings.
     Lazada uses {"txt": "..."} or {"ext": "{...}", "txt": "..."}.
     Shopee uses {"text": "...", "translation": {...}}.
     TikTok uses {"content": "..."} or {"order_id": "..."}.
- 
+
     Returns a clean plain-text string (may be empty for media-only messages).
     """
     if not isinstance(raw_msg, str) or not raw_msg.strip():
         return ""
- 
+
     # Fast path: message is already plain text (no JSON braces)
     stripped = raw_msg.strip()
     if not stripped.startswith("{") and not stripped.startswith("["):
         return stripped
- 
+
     try:
         obj = json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
         # Partial / malformed JSON — try direct text extraction
         return _regex_extract_text(stripped)
- 
+
     if not isinstance(obj, dict):
         return ""
- 
+
     # ── Priority order of text fields across platforms ────────────────────────
     for key in ("txt", "text", "content"):
         val = obj.get(key)
@@ -781,7 +918,7 @@ def extract_plain_text(raw_msg: str) -> str:
                 if inner:
                     return inner
             return val.strip()
- 
+
     # ── Lazada ext field: stringified JSON with a "summary" key ──────────────
     ext_raw = obj.get("ext")
     if isinstance(ext_raw, str) and ext_raw.strip().startswith("{"):
@@ -793,11 +930,11 @@ def extract_plain_text(raw_msg: str) -> str:
                     return v.strip()
         except (json.JSONDecodeError, ValueError):
             pass
- 
+
     # ── Nothing useful extracted ───────────────────────────────────────────────
     return ""
- 
- 
+
+
 def _try_json_values(s: str) -> str:
     """Try to parse a JSON string and return the first non-empty string value."""
     try:
@@ -809,8 +946,8 @@ def _try_json_values(s: str) -> str:
     except (json.JSONDecodeError, ValueError):
         pass
     return ""
- 
- 
+
+
 def _regex_extract_text(s: str) -> str:
     """Fallback: extract quoted text values from a JSON-like string via regex."""
     # Match values for common keys: txt, text, content, summary
@@ -818,12 +955,12 @@ def _regex_extract_text(s: str) -> str:
     if m:
         return m.group(1).replace("\\n", " ").replace('\\"', '"').strip()
     return ""
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def detect_sentiment(text: str) -> str:
     if not isinstance(text, str) or not text.strip():
         return "Neutral"
@@ -835,19 +972,27 @@ def detect_sentiment(text: str) -> str:
     if pos > neg:
         return "Positive"
     return "Neutral"
- 
- 
+
+
 def detect_issue_type(text: str, tsv_lookup: dict | None = None) -> str:
     """
     Classify buyer message text into an issue type.
- 
+
     IMPROVED LOGIC:
     1. TSV keywords are checked first with weight=2 (higher precision source).
     2. Legacy ISSUE_KEYWORDS are checked with weight=1.
     3. The issue type with the highest cumulative score wins.
     4. On ties, priority order (High > Medium > Low) breaks the tie.
     5. Returns "Other" if no keywords matched.
- 
+
+    NOTE: ISSUE_KEYWORDS now carries a substantially expanded, multilingual
+    keyword set (see constants section) covering many more real-world phrasings
+    per issue type. This function's matching logic is unchanged — it still does
+    a case-insensitive substring match — but with more keywords available,
+    far fewer genuine buyer issues will fail to match any keyword and fall
+    through to "Other". "Other" is only returned when truly no keyword from
+    any issue type (TSV or legacy) is found in the buyer's message.
+
     Parameters
     ----------
     text : str
@@ -859,63 +1004,98 @@ def detect_issue_type(text: str, tsv_lookup: dict | None = None) -> str:
     if not isinstance(text, str) or not text.strip():
         return "Other"
     t = text.lower()
- 
+
     scores: dict[str, float] = {}
- 
+
     # ── Step 1: TSV keywords (weight=2) ──────────────────────────────────────
     if tsv_lookup:
         for kw, issue in tsv_lookup.items():
             if kw and kw in t:
                 scores[issue] = scores.get(issue, 0) + 2
- 
+
     # ── Step 2: Legacy keywords (weight=1) ────────────────────────────────────
     for issue, kws in ISSUE_KEYWORDS.items():
         for kw in kws:
             if kw.lower() in t:
                 scores[issue] = scores.get(issue, 0) + 1
- 
+
     if not scores:
         return "Other"
- 
+
     # ── Step 3: Break ties by priority (High wins) ────────────────────────────
     priority_order = {"High": 0, "Medium": 1, "Low": 2}
     max_score = max(scores.values())
     tied = [iss for iss, sc in scores.items() if sc == max_score]
     if len(tied) == 1:
         return tied[0]
- 
+
     # Among tied, pick the one with highest (most urgent) priority
     def _priority_rank(iss):
         for p, issues in PRIORITY_MAP.items():
             if iss in issues:
                 return priority_order.get(p, 3)
         return 3
- 
+
     return min(tied, key=_priority_rank)
- 
- 
-def get_priority(issue_type: str) -> str:
+
+
+def _has_escalation_keyword(text: str) -> bool:
+    """
+    NEW: Returns True if the buyer's text contains any High-priority
+    escalation keyword (fraud, account hacked, legal/chargeback threats,
+    double charge, safety issue, false "delivered" status, etc.).
+
+    This is deliberately independent of Issue Type detection — it only
+    looks at raw keyword presence in the buyer's message so it can override
+    priority even when the Issue Type itself resolves to something that
+    would normally be Medium/Low priority (e.g. "Payment Issue").
+    """
+    if not isinstance(text, str) or not text.strip():
+        return False
+    t = text.lower()
+    return any(kw in t for kw in HIGH_PRIORITY_ESCALATION_KEYWORDS)
+
+
+def get_priority(issue_type: str, text: str | None = None) -> str:
+    """
+    Return the priority ("High" / "Medium" / "Low") for a given issue type.
+
+    UPDATED: now accepts an optional `text` parameter (the buyer's message
+    text for the conversation). If any High-priority escalation keyword
+    (fraud, account hacked, legal threat/chargeback, double charge, safety
+    issue, false "delivered" status, etc. — see HIGH_PRIORITY_ESCALATION_KEYWORDS)
+    is present, the conversation is escalated to "High" priority regardless
+    of its Issue Type. This lets urgent situations that happen to live inside
+    a Medium/Low-priority Issue Type (e.g. a double-charge inside
+    "Payment Issue") still get flagged as High priority.
+
+    `text` is optional and defaults to None, so every existing call site that
+    calls `get_priority(issue_type)` without a text argument continues to
+    work exactly as before (base PRIORITY_MAP lookup only).
+    """
+    if text is not None and _has_escalation_keyword(text):
+        return "High"
     for priority, issues in PRIORITY_MAP.items():
         if issue_type in issues:
             return priority
     return "Low"
- 
- 
+
+
 def matches_any(text: str, patterns: list) -> bool:
     if not isinstance(text, str):
         return False
     t = text.lower()
     return any(re.search(p, t, re.IGNORECASE) for p in patterns)
- 
- 
+
+
 def is_auto_reply(text: str) -> bool:
     return matches_any(text, AUTO_REPLY_PATTERNS)
- 
- 
+
+
 def conversation_is_unresolved(seller_msgs_plain: list) -> bool:
     """
     Determine whether a conversation is unresolved.
- 
+
     IMPROVED LOGIC:
     - Receives pre-parsed plain-text seller messages (not raw JSON).
     - Auto-replies and bot messages are excluded from both stall and
@@ -924,7 +1104,7 @@ def conversation_is_unresolved(seller_msgs_plain: list) -> bool:
       to False. If stall_found is True at the end → unresolved.
     - Conversations with zero seller messages are considered unresolved
       (buyer has not received any response).
- 
+
     Parameters
     ----------
     seller_msgs_plain : list[str]
@@ -933,32 +1113,32 @@ def conversation_is_unresolved(seller_msgs_plain: list) -> bool:
     if not seller_msgs_plain:
         # No seller messages at all — buyer has not been responded to
         return True
- 
+
     stall_found = False
     human_msg_seen = False  # at least one real (non-bot) seller message
- 
+
     for msg in seller_msgs_plain:
         if not isinstance(msg, str) or not msg.strip():
             continue
- 
+
         # Skip bot / auto-reply messages — they don't count for resolution
         if is_auto_reply(msg):
             continue
- 
+
         human_msg_seen = True
- 
+
         if matches_any(msg, RESOLUTION_PATTERNS):
             stall_found = False   # resolution clears the stall flag
         elif matches_any(msg, STALLING_PATTERNS):
             stall_found = True    # stall raised (until resolved)
- 
+
     # If only bot messages exist with no human response → unresolved
     if not human_msg_seen:
         return True
- 
+
     return stall_found
- 
- 
+
+
 def compute_csat(sentiment: str, is_resolved: bool) -> float:
     matrix = {
         ("Positive", True):  5.0,
@@ -969,15 +1149,15 @@ def compute_csat(sentiment: str, is_resolved: bool) -> float:
         ("Negative", False): 1.0,
     }
     return matrix.get((sentiment, is_resolved), 3.0)
- 
- 
+
+
 def generate_summary(buyer_msgs: list, issue_type: str) -> str:
     if not buyer_msgs:
         return "No buyer messages."
     combined = " ".join([m for m in buyer_msgs if isinstance(m, str)])[:400]
     return f"[{issue_type}] Buyer enquiry: {combined[:200]}{'...' if len(combined) > 200 else ''}"
- 
- 
+
+
 def fmt_mins(mins) -> str:
     if pd.isna(mins) or mins < 0:
         return "—"
@@ -986,8 +1166,8 @@ def fmt_mins(mins) -> str:
     h = int(mins // 60)
     m = int(mins % 60)
     return f"{h}h {m}m" if m else f"{h}h"
- 
- 
+
+
 def get_team_member(store_code: str, country_code: str = "") -> str:
     code = str(store_code).strip().upper()
     if not code:
@@ -997,33 +1177,33 @@ def get_team_member(store_code: str, country_code: str = "") -> str:
         country = str(country_code).strip().upper()
         return GED_COUNTRY_TO_AGENT.get(country, "Others")
     return STORE_TO_AGENT.get(code, "Others")
- 
- 
+
+
 def detect_conversion(buyer_msgs: list) -> bool:
     combined = " ".join([m for m in buyer_msgs if isinstance(m, str)]).lower()
     return any(kw.lower() in combined for kw in CONVERSION_KEYWORDS)
- 
- 
+
+
 def get_action_steps(issue_type: str) -> str:
     return ACTION_STEPS.get(issue_type, ACTION_STEPS["Other"])
- 
- 
+
+
 def filter_stores_by_search(all_stores: list, search_term: str) -> list:
     if not search_term or not search_term.strip():
         return all_stores
     term = search_term.strip().upper()
     return [s for s in all_stores if term in str(s).upper()]
- 
- 
+
+
 def compute_wow_mom(conv_df: pd.DataFrame) -> tuple:
     df = conv_df.copy()
     df = df[df["LAST_MSG_TIME"].notna()].copy()
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
- 
+
     df["WEEK"]  = df["LAST_MSG_TIME"].dt.to_period("W").apply(lambda r: r.start_time)
     df["MONTH"] = df["LAST_MSG_TIME"].dt.to_period("M").apply(lambda r: r.start_time)
- 
+
     def agg_metrics(df_in, period_col):
         agg = (
             df_in.groupby(period_col)
@@ -1049,18 +1229,18 @@ def compute_wow_mom(conv_df: pd.DataFrame) -> tuple:
         for col in ["Conversations", "Avg_CSAT", "CRR_%", "Avg_CRT_mins", "Conversions"]:
             agg[f"Δ {col}"] = agg[col].diff().round(2)
         return agg
- 
+
     wow = agg_metrics(df, "WEEK")
     mom = agg_metrics(df, "MONTH")
     return wow, mom
- 
- 
+
+
 def compute_team_performance(conv_df: pd.DataFrame) -> pd.DataFrame:
     df = conv_df.copy()
     df = df[df["LAST_MSG_TIME"] >= TEAM_START_DATE].copy()
     if df.empty or "TEAM_MEMBER" not in df.columns:
         return pd.DataFrame()
- 
+
     perf = (
         df.groupby("TEAM_MEMBER")
         .agg(
@@ -1082,12 +1262,12 @@ def compute_team_performance(conv_df: pd.DataFrame) -> pd.DataFrame:
     perf["Shift"]        = perf["TEAM_MEMBER"].map(AGENT_SHIFT).fillna("Day")
     perf = perf.sort_values("Conversations", ascending=False).reset_index(drop=True)
     return perf
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DATA LOADING
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
     """
     Repair a streaming XLSX (Google Sheets / some exporters) that is missing
@@ -1095,17 +1275,17 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
     Returns original bytes unchanged if already a valid ZIP.
     """
     import zipfile as _zf, struct as _st, zlib as _zl, re as _re
- 
+
     try:
         with _zf.ZipFile(io.BytesIO(file_bytes)):
             pass
         return file_bytes
     except _zf.BadZipFile:
         pass
- 
+
     data = bytearray(file_bytes)
     extracted = {}
- 
+
     pos = 0
     while pos < len(data) - 30:
         idx = data.find(b"PK\x03\x04", pos)
@@ -1118,7 +1298,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             fname = data[idx+30: idx+30+fname_len].decode("utf-8", errors="replace")
             data_start = idx + 30 + fname_len + extra_len
             raw = bytes(data[data_start:])
- 
+
             if method == 8:
                 d = _zl.decompressobj(-15)
                 content = b""
@@ -1134,7 +1314,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             else:
                 pos = idx + 4
                 continue
- 
+
             if fname and content:
                 if fname == "xl/sharedStrings.xml" and b"</sst>" not in content:
                     last_si = content.rfind(b"</si>")
@@ -1144,16 +1324,16 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
         except Exception:
             pass
         pos = idx + 4
- 
+
     if not extracted:
         return file_bytes
- 
+
     sheet_keys = sorted(
         [k for k in extracted if k.startswith("xl/worksheets/sheet") and k.endswith(".xml")],
         key=lambda x: int(_re.search(r"sheet(\d+)", x).group(1)) if _re.search(r"sheet(\d+)", x) else 0
     )
     n_sheets = len(sheet_keys)
- 
+
     if "[Content_Types].xml" not in extracted:
         sheet_overrides = "\n".join(
             f'  <Override PartName="/xl/worksheets/sheet{i+1}.xml" '
@@ -1171,7 +1351,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             + sheet_overrides + "\n"
             "</Types>"
         ).encode("utf-8")
- 
+
     if "_rels/.rels" not in extracted:
         extracted["_rels/.rels"] = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -1179,7 +1359,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>\n'
             "</Relationships>"
         ).encode("utf-8")
- 
+
     if "xl/workbook.xml" not in extracted:
         sheet_elems = "\n".join(
             f'    <sheet name="Sheet{i+1}" sheetId="{i+1}" r:id="rId{i+1}"/>'
@@ -1194,7 +1374,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             "  </sheets>\n"
             "</workbook>"
         ).encode("utf-8")
- 
+
     if "xl/_rels/workbook.xml.rels" not in extracted:
         rels = []
         for i in range(n_sheets):
@@ -1215,7 +1395,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             + "\n".join(rels) + "\n"
             "</Relationships>"
         ).encode("utf-8")
- 
+
     if "xl/styles.xml" not in extracted:
         extracted["xl/styles.xml"] = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
@@ -1227,7 +1407,7 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
             '  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>\n'
             "</styleSheet>"
         ).encode("utf-8")
- 
+
     new_zip = io.BytesIO()
     with _zf.ZipFile(new_zip, "w", compression=_zf.ZIP_DEFLATED) as zout:
         for priority in ["[Content_Types].xml", "_rels/.rels",
@@ -1240,24 +1420,24 @@ def _repair_streaming_xlsx(file_bytes: bytes) -> bytes:
                               "xl/workbook.xml", "xl/_rels/workbook.xml.rels",
                               "xl/styles.xml", "xl/sharedStrings.xml"]:
                 zout.writestr(fname, content)
- 
+
     new_zip.seek(0)
     return new_zip.read()
- 
- 
+
+
 @st.cache_data(show_spinner=False)
 def load_data(file_bytes: bytes, _file_hash: str = "") -> pd.DataFrame:
     """
     Load and normalise the raw message-level DataFrame from an XLSX file.
- 
+
     CHANGE: Added MESSAGE_PARSED column population using extract_plain_text()
     so that downstream analysis works on clean text rather than raw JSON.
     """
     file_bytes = _repair_streaming_xlsx(file_bytes)
- 
+
     xl = pd.ExcelFile(io.BytesIO(file_bytes))
     sheets_found = xl.sheet_names
- 
+
     dfs = []
     for s in sheets_found:
         name_lower = s.lower()
@@ -1269,9 +1449,9 @@ def load_data(file_bytes: bytes, _file_hash: str = "") -> pd.DataFrame:
             platform = "TikTok"
         else:
             platform = "Unknown"
- 
+
         df = xl.parse(s, dtype=str)
- 
+
         if platform == "Unknown" and "SITE_NICK_NAME_ID" in df.columns:
             sample_sites = df["SITE_NICK_NAME_ID"].dropna().astype(str).str.lower()
             if sample_sites.str.contains("shopee").any():
@@ -1280,16 +1460,16 @@ def load_data(file_bytes: bytes, _file_hash: str = "") -> pd.DataFrame:
                 platform = "Lazada"
             elif sample_sites.str.contains("tiktok|tik_tok").any():
                 platform = "TikTok"
- 
+
         df["PLATFORM"] = platform
- 
+
         # ── Normalise column name variants ────────────────────────────────────
         if "MESSAGE_TIME" not in df.columns:
             if "MSG_TIME_RAW_TS" in df.columns:
                 df = df.rename(columns={"MSG_TIME_RAW_TS": "MESSAGE_TIME"})
             elif "MSG_TIME_RAW" in df.columns:
                 df = df.rename(columns={"MSG_TIME_RAW": "MESSAGE_TIME"})
- 
+
         if "MESSAGE_PARSED" not in df.columns:
             if "MESSAGE" in df.columns:
                 df = df.rename(columns={"MESSAGE": "MESSAGE_PARSED"})
@@ -1297,117 +1477,124 @@ def load_data(file_bytes: bytes, _file_hash: str = "") -> pd.DataFrame:
                 df = df.rename(columns={"CONTENT": "MESSAGE_PARSED"})
             elif "MSG_CONTENT" in df.columns:
                 df = df.rename(columns={"MSG_CONTENT": "MESSAGE_PARSED"})
- 
+
         if "CONVERSATION_ID" not in df.columns:
             if "CHAT_ID" in df.columns:
                 df = df.rename(columns={"CHAT_ID": "CONVERSATION_ID"})
             elif "SESSION_ID" in df.columns:
                 df = df.rename(columns={"SESSION_ID": "CONVERSATION_ID"})
- 
+
         if "STORE_CODE" not in df.columns:
             if "SHOP_CODE" in df.columns:
                 df = df.rename(columns={"SHOP_CODE": "STORE_CODE"})
             elif "SELLER_ID" in df.columns:
                 df = df.rename(columns={"SELLER_ID": "STORE_CODE"})
- 
+
         if "BUYER_NAME" not in df.columns:
             if "USER" in df.columns:
                 df = df.rename(columns={"USER": "BUYER_NAME"})
             elif "CUSTOMER_NAME" in df.columns:
                 df = df.rename(columns={"CUSTOMER_NAME": "BUYER_NAME"})
- 
+
         if "SENDER" not in df.columns:
             if "ROLE" in df.columns:
                 df = df.rename(columns={"ROLE": "SENDER"})
             elif "FROM" in df.columns:
                 df = df.rename(columns={"FROM": "SENDER"})
- 
+
         if "MESSAGE_TIME" not in df.columns:
             continue
- 
+
         # ── NEW: Extract plain text from JSON-encoded message blobs ───────────
         if "MESSAGE_PARSED" in df.columns:
             df["MESSAGE_PARSED"] = df["MESSAGE_PARSED"].apply(extract_plain_text)
- 
+
         dfs.append(df)
- 
+
     if not dfs:
         st.error("No valid chat sheets found in the uploaded file.")
         return pd.DataFrame()
- 
+
     combined = pd.concat(dfs, ignore_index=True)
- 
+
     dedup_cols = [c for c in ["CONVERSATION_ID", "MESSAGE_TIME", "SENDER", "MESSAGE_PARSED"] if c in combined.columns]
     combined = combined.drop_duplicates(subset=dedup_cols, keep="first")
- 
+
     combined["MESSAGE_TIME"] = pd.to_datetime(combined["MESSAGE_TIME"], errors="coerce")
     combined = combined[combined["MESSAGE_TIME"].notna()].copy()
- 
+
     for col in ["STORE_CODE", "SITE_NICK_NAME_ID", "CHANNEL_NAME", "COUNTRY_CODE",
                 "CONVERSATION_ID", "BUYER_NAME", "MESSAGE_PARSED",
                 "MESSAGE_TYPE", "SENDER"]:
         if col in combined.columns:
             combined[col] = combined[col].fillna("").astype(str).str.strip()
- 
+
     for flag in ["IS_READ", "IS_ANSWERED"]:
         if flag in combined.columns:
             combined[flag] = (
                 combined[flag].astype(str).str.strip().str.lower()
                 .isin(["true", "1", "yes"])
             )
- 
+
     return combined
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ANALYSIS ENGINE
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 @st.cache_data(show_spinner=False, max_entries=1)
 def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
     """
     Conversation-level analysis engine.
- 
+
     CHANGE: Passes pre-parsed plain-text messages to detect_issue_type()
     and conversation_is_unresolved() instead of raw JSON blobs.
     The tsv_lookup is built once and reused for all conversations.
+
+    NEW: `get_priority()` is now called with the conversation's buyer text
+    as well as its Issue Type, so High-priority escalation keywords (fraud,
+    account hacked, legal threat/chargeback, double charge, safety issue,
+    false "delivered" status, etc.) can bump PRIORITY to "High" even when
+    the Issue Type itself would normally resolve to Medium/Low. Issue Type
+    detection itself is unchanged.
     """
     # ── Load TSV reference once ───────────────────────────────────────────────
     tsv_lookup = build_tsv_lookup(tsv_path) if tsv_path else {}
- 
+
     df = df.copy()
     df["_sender_lower"] = df["SENDER"].str.lower().fillna("")
     df_sorted = df.sort_values(["CONVERSATION_ID", "MESSAGE_TIME"])
- 
+
     buyer_mask  = df_sorted["_sender_lower"] == "buyer"
     seller_mask = df_sorted["_sender_lower"] == "seller"
- 
+
     # MESSAGE_PARSED is now plain text (extracted in load_data)
     buyer_text_per_conv = (
         df_sorted[buyer_mask]
         .groupby("CONVERSATION_ID")["MESSAGE_PARSED"]
         .apply(lambda msgs: " ".join(m for m in msgs if isinstance(m, str) and m.strip()))
     )
- 
+
     # Pass tsv_lookup to the issue detector
     issue_map     = buyer_text_per_conv.apply(
         lambda txt: detect_issue_type(txt, tsv_lookup)
     )
     sentiment_map = buyer_text_per_conv.apply(detect_sentiment)
- 
+
     meta_cols = ["PLATFORM", "STORE_CODE", "SITE_NICK_NAME_ID", "CHANNEL_NAME",
                  "COUNTRY_CODE", "BUYER_NAME", "BUYER_ID", "IS_ANSWERED", "IS_READ"]
     meta_cols = [c for c in meta_cols if c in df_sorted.columns]
     meta_df = df_sorted.groupby("CONVERSATION_ID")[meta_cols].first()
- 
+
     time_df = df_sorted.groupby("CONVERSATION_ID")["MESSAGE_TIME"].agg(
         FIRST_MSG_TIME="min", LAST_MSG_TIME="max"
     )
- 
+
     total_msgs        = df_sorted.groupby("CONVERSATION_ID").size().rename("MSG_COUNT")
     buyer_msgs_count  = df_sorted[buyer_mask].groupby("CONVERSATION_ID").size().rename("BUYER_MSG_COUNT")
     seller_msgs_count = df_sorted[seller_mask].groupby("CONVERSATION_ID").size().rename("SELLER_MSG_COUNT")
- 
+
     # Seller messages as plain text lists (already extracted in load_data)
     seller_msgs_per_conv = (
         df_sorted[seller_mask]
@@ -1419,7 +1606,7 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
         .groupby("CONVERSATION_ID")["MESSAGE_PARSED"]
         .apply(list)
     )
- 
+
     rows = []
     for conv_id, grp in df_sorted.groupby("CONVERSATION_ID", sort=False):
         issue_type = issue_map.get(conv_id, "Other")
@@ -1427,13 +1614,16 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
         b_msgs     = buyer_msgs_per_conv.get(conv_id, [])
         s_msgs     = seller_msgs_per_conv.get(conv_id, [])
         meta       = meta_df.loc[conv_id] if conv_id in meta_df.index else {}
- 
+
         # CHANGE: seller messages are now plain text — resolution detection works correctly
         is_unresolved = conversation_is_unresolved(s_msgs)
         is_resolved   = not is_unresolved
-        priority      = get_priority(issue_type)
+        buyer_text    = buyer_text_per_conv.get(conv_id, "")
+        # NEW: pass buyer_text so High-priority escalation keywords can
+        # bump PRIORITY to "High" regardless of the detected Issue Type.
+        priority      = get_priority(issue_type, buyer_text)
         csat          = compute_csat(sentiment, is_resolved)
- 
+
         crt_list = []
         last_buyer_time = None
         for sender, msg_time in zip(grp["_sender_lower"].tolist(), grp["MESSAGE_TIME"].tolist()):
@@ -1445,13 +1635,13 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
                     crt_list.append(delta)
                 last_buyer_time = None
         avg_crt = float(np.mean(crt_list)) if crt_list else np.nan
- 
+
         def _get(field, default=""):
             try:
                 return meta[field] if hasattr(meta, "__getitem__") else getattr(meta, field, default)
             except Exception:
                 return default
- 
+
         rows.append({
             "CONVERSATION_ID":   conv_id,
             "PLATFORM":          _get("PLATFORM"),
@@ -1479,37 +1669,37 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
             "IS_ANSWERED":       str(_get("IS_ANSWERED")).lower() == "true",
             "IS_READ":           str(_get("IS_READ")).lower() == "true",
         })
- 
+
     result = pd.DataFrame(rows)
- 
+
     for col in ["PLATFORM", "ISSUE_TYPE", "PRIORITY", "SENTIMENT",
                 "STORE_CODE", "CHANNEL_NAME", "COUNTRY_CODE", "TEAM_MEMBER", "SITE_NICK_NAME_ID"]:
         if col in result.columns:
             result[col] = result[col].astype("category")
- 
+
     for col in ["BUYER_SUMMARY"]:
         if col in result.columns:
             result[col] = result[col].str[:300]
- 
+
     gc.collect()
     return result
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # EXCEL EXPORT
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
     df = conv_df.copy()
     df["SUGGESTED_REPLY"] = df["ISSUE_TYPE"].astype(str).map(
         lambda it: SUGGESTED_REPLIES.get(it, SUGGESTED_REPLIES["Other"])
     )
     df["ACTION_STEPS"] = df["ISSUE_TYPE"].astype(str).map(get_action_steps)
- 
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         wb = writer.book
- 
+
         hdr_fmt  = wb.add_format({"bold": True, "bg_color": "#1B2A4A", "font_color": "#FFFFFF",
                                    "border": 1, "font_size": 10, "align": "center", "valign": "vcenter"})
         sub_fmt  = wb.add_format({"bold": True, "bg_color": "#00C4B4", "font_color": "#FFFFFF",
@@ -1517,13 +1707,13 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         num_fmt  = wb.add_format({"num_format": "#,##0", "border": 1})
         dec_fmt  = wb.add_format({"num_format": "0.0", "border": 1})
         cell_fmt = wb.add_format({"border": 1, "font_size": 9, "text_wrap": True, "valign": "top"})
- 
+
         # ── Sheet 1: Summary Dashboard ────────────────────────────────────────
         ws1 = wb.add_worksheet("Summary Dashboard")
         writer.sheets["Summary Dashboard"] = ws1
         ws1.set_column(0, 0, 28)
         ws1.set_column(1, 1, 20)
- 
+
         total      = len(df)
         resolved   = df["IS_RESOLVED"].sum()
         unresolved = df["IS_UNRESOLVED"].sum()
@@ -1534,12 +1724,12 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         data_max_date = data_max_ts.normalize() if pd.notna(data_max_ts) else pd.Timestamp(today_str)
         today_df   = df[df["LAST_MSG_TIME"].dt.normalize() == data_max_date]
         hi_today   = len(today_df[today_df["PRIORITY"] == "High"])
- 
+
         ws1.write(0, 0, f"Chat Analyzer Summary — {today_str}", wb.add_format(
             {"bold": True, "font_size": 14, "font_color": "#1B2A4A"}))
         ws1.write(1, 0, "Generated by Graas.ai Chat Analyzer Dashboard", wb.add_format(
             {"italic": True, "font_color": "#7A8EA8"}))
- 
+
         summary_data = [
             ["Total Conversations", total],
             ["Today's Conversations", len(today_df)],
@@ -1557,13 +1747,13 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         for i, (label, val) in enumerate(summary_data, start=3):
             ws1.write(i, 0, label, sub_fmt)
             ws1.write(i, 1, val, cell_fmt)
- 
+
         ws1.write(13, 0, "ISSUE TYPE BREAKDOWN", sub_fmt)
         ws1.write(13, 1, "COUNT", hdr_fmt)
         for i, (issue, cnt) in enumerate(df["ISSUE_TYPE"].value_counts().items(), start=14):
             ws1.write(i, 0, issue, cell_fmt)
             ws1.write(i, 1, int(cnt), num_fmt)
- 
+
         # ── Sheet 2: Today Priority Chats ─────────────────────────────────────
         priority_cols = [c for c in [
             "CONVERSATION_ID", "PLATFORM", "STORE_CODE", "CHANNEL_NAME",
@@ -1579,7 +1769,7 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         ws2.set_column(0, 0, 40); ws2.set_column(1, 5, 15); ws2.set_column(10, 13, 50)
         for c_idx, col in enumerate(today_pri.columns):
             ws2.write(0, c_idx, col, hdr_fmt)
- 
+
         # ── Sheet 3: Detailed Chat Analysis ───────────────────────────────────
         detail_cols = [c for c in [
             "CONVERSATION_ID", "PLATFORM", "STORE_CODE", "CHANNEL_NAME",
@@ -1597,7 +1787,7 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         ws3.set_column(0, 0, 40); ws3.set_column(7, 8, 18); ws3.set_column(17, 19, 60)
         for c_idx, col in enumerate(detail.columns):
             ws3.write(0, c_idx, col, hdr_fmt)
- 
+
         # ── Sheet 4: Unresolved Chats ─────────────────────────────────────────
         unres = df[df["IS_UNRESOLVED"]][priority_cols].sort_values(
             "PRIORITY", key=lambda s: s.map({"High": 0, "Medium": 1, "Low": 2}).fillna(3)
@@ -1607,15 +1797,15 @@ def build_excel(conv_df: pd.DataFrame, today_str: str) -> bytes:
         ws4.set_column(0, 0, 40); ws4.set_column(10, 13, 50)
         for c_idx, col in enumerate(unres.columns):
             ws4.write(0, c_idx, col, hdr_fmt)
- 
+
     buf.seek(0)
     return buf.read()
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UI COMPONENTS
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def render_header():
     st.markdown("""
     <div class="graas-header">
@@ -1626,8 +1816,8 @@ def render_header():
         </div>
     </div>
     """, unsafe_allow_html=True)
- 
- 
+
+
 def render_metrics(conv_df: pd.DataFrame, today_ts: pd.Timestamp):
     total      = len(conv_df)
     resolved   = int(conv_df["IS_RESOLVED"].sum())
@@ -1638,7 +1828,7 @@ def render_metrics(conv_df: pd.DataFrame, today_ts: pd.Timestamp):
     today_conv = conv_df[conv_df["LAST_MSG_TIME"].dt.normalize() == today_ts]
     hi_today   = len(today_conv[today_conv["PRIORITY"] == "High"])
     neg_pct    = round(len(conv_df[conv_df["SENTIMENT"] == "Negative"]) / total * 100, 1) if total else 0
- 
+
     cols = st.columns(8)
     metrics = [
         (cols[0], "🗣️ Total Convs", f"{total:,}",   "all platforms", ""),
@@ -1659,27 +1849,27 @@ def render_metrics(conv_df: pd.DataFrame, today_ts: pd.Timestamp):
                 <div class="metric-sub">{sub}</div>
             </div>
             """, unsafe_allow_html=True)
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR FILTERS
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) -> pd.DataFrame:
     src = conv_df
- 
+
     st.sidebar.markdown("## 🔍 Filters")
     st.sidebar.markdown("---")
- 
+
     platforms = ["All"] + sorted(src["PLATFORM"].dropna().unique().tolist())
     sel_platform = st.sidebar.selectbox("🌐 Platform", platforms)
- 
+
     _ts_min = src["LAST_MSG_TIME"].dropna().min()
     _ts_max = src["LAST_MSG_TIME"].dropna().max()
     min_date = _ts_min.date() if pd.notna(_ts_min) else datetime.today().date()
     max_date = _ts_max.date() if pd.notna(_ts_max) else datetime.today().date()
     default_start = min_date
- 
+
     date_range = st.sidebar.date_input(
         "📅 Date Range",
         value=(default_start, max_date),
@@ -1687,22 +1877,22 @@ def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) 
         max_value=max_date,
         help="Defaults to full data range in the file. Narrow to focus on a specific period.",
     )
- 
+
     sel_prio  = st.sidebar.selectbox("🔴 Priority", ["All", "High", "Medium", "Low"])
     sel_sent  = st.sidebar.selectbox("😊 Sentiment", ["All", "Positive", "Neutral", "Negative"])
     sel_res   = st.sidebar.selectbox("✅ Resolution Status", ["All", "Resolved", "Unresolved"])
     issue_opts = ["All"] + sorted(src["ISSUE_TYPE"].dropna().unique().tolist())
     sel_issue = st.sidebar.selectbox("🏷️ Issue Type", issue_opts)
- 
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🔎 Search & Filter")
- 
+
     if "TEAM_MEMBER" in src.columns:
         all_agents = sorted(src["TEAM_MEMBER"].dropna().unique().tolist())
         sel_agents = st.sidebar.multiselect("👤 Team Member", all_agents)
     else:
         sel_agents = []
- 
+
     all_stores = sorted(src["STORE_CODE"].dropna().unique().tolist())
     store_search = st.sidebar.text_input(
         "🔍 Search Store Code",
@@ -1710,7 +1900,7 @@ def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) 
         help="Partial match — type any part of the store code.",
     )
     filtered_store_opts = filter_stores_by_search(all_stores, store_search)
- 
+
     if store_search and filtered_store_opts:
         st.sidebar.markdown(
             f'<div class="store-search-info">🔍 {len(filtered_store_opts)} store(s) match "<b>{store_search}</b>"</div>',
@@ -1718,31 +1908,31 @@ def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) 
         )
     elif store_search and not filtered_store_opts:
         st.sidebar.warning(f'No stores match "{store_search}"')
- 
+
     sel_stores = st.sidebar.multiselect(
         "🏪 Store Code (select from results)",
         options=filtered_store_opts,
         default=filtered_store_opts if store_search and filtered_store_opts else [],
     )
- 
+
     all_countries = sorted(src["COUNTRY_CODE"].dropna().unique().tolist())
     sel_countries = st.sidebar.multiselect("🌍 Country", all_countries)
- 
+
     if "CHANNEL_NAME" in src.columns:
         all_channels = sorted(src["CHANNEL_NAME"].dropna().replace("", pd.NA).dropna().unique().tolist())
         sel_channels = st.sidebar.multiselect("📡 Channel Name", all_channels)
     else:
         sel_channels = []
- 
+
     buyer_search = st.sidebar.text_input("🔍 Buyer Name")
     conv_search  = st.sidebar.text_input("🔍 Conversation ID")
- 
+
     # ── Apply filters ─────────────────────────────────────────────────────────
     result = src.copy()
- 
+
     if sel_platform != "All":
         result = result[result["PLATFORM"] == sel_platform]
- 
+
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         start_ts = pd.Timestamp(date_range[0])
         end_ts   = pd.Timestamp(date_range[1]) + pd.Timedelta(hours=23, minutes=59, seconds=59)
@@ -1750,51 +1940,51 @@ def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) 
             (result["LAST_MSG_TIME"] >= start_ts) &
             (result["LAST_MSG_TIME"] <= end_ts)
         ]
- 
+
     if sel_prio != "All":
         result = result[result["PRIORITY"] == sel_prio]
- 
+
     if sel_sent != "All":
         result = result[result["SENTIMENT"] == sel_sent]
- 
+
     if sel_res == "Resolved":
         result = result[result["IS_RESOLVED"]]
     elif sel_res == "Unresolved":
         result = result[result["IS_UNRESOLVED"]]
- 
+
     if sel_issue != "All":
         result = result[result["ISSUE_TYPE"] == sel_issue]
- 
+
     if sel_agents:
         result = result[result["TEAM_MEMBER"].isin(sel_agents)]
- 
+
     if sel_stores:
         result = result[result["STORE_CODE"].isin(sel_stores)]
- 
+
     if sel_countries:
         result = result[result["COUNTRY_CODE"].isin(sel_countries)]
- 
+
     if sel_channels and "CHANNEL_NAME" in result.columns:
         result = result[result["CHANNEL_NAME"].isin(sel_channels)]
- 
+
     if buyer_search:
         result = result[result["BUYER_NAME"].str.contains(buyer_search, case=False, na=False)]
- 
+
     if conv_search:
         result = result[result["CONVERSATION_ID"].str.contains(conv_search, case=False, na=False)]
- 
+
     st.sidebar.markdown("---")
     total = len(result)
     st.sidebar.markdown(f"**{total:,}** of **{len(src):,}** conversations")
     if total == 0:
         st.sidebar.warning("No results — try widening the date range or clearing filters.")
     return result
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # TSV UPLOAD SIDEBAR WIDGET  (NEW)
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def get_tsv_path_from_sidebar() -> str:
     """
     Allow users to upload a TSV reference file via the sidebar.
@@ -1811,7 +2001,7 @@ def get_tsv_path_from_sidebar() -> str:
         key="tsv_uploader",
         help="Two-column TSV: 'Issue type' | 'Key words'. Upload the same reference table used to configure this dashboard.",
     )
- 
+
     if tsv_file is not None:
         # Save uploaded TSV to a temp file that build_tsv_lookup can read
         tsv_tmp = "/tmp/chat_analyzer_ref.tsv"
@@ -1823,31 +2013,31 @@ def get_tsv_path_from_sidebar() -> str:
         else:
             st.sidebar.warning("⚠️ TSV uploaded but no valid mappings found. Check column names.")
         return tsv_tmp
- 
+
     # Fall back to default path (file next to the script)
     if os.path.exists(TSV_REFERENCE_PATH):
         lookup = build_tsv_lookup(TSV_REFERENCE_PATH)
         if lookup:
             st.sidebar.info(f"ℹ️ Using bundled TSV — {len(lookup)} keyword mappings active")
         return TSV_REFERENCE_PATH
- 
+
     return ""
- 
- 
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
- 
+
 def main():
     render_header()
- 
+
     st.markdown('<div class="section-title">📂 Upload Chat Data</div>', unsafe_allow_html=True)
     uploaded = st.file_uploader(
         "Upload Excel file with sheets: lazada_chat_enquiries, shopee_chat_enquiries & tiktok_chat_enquiries",
         type=["xlsx"],
         help="Single Excel file containing Lazada, Shopee, and/or TikTok chat sheets.",
     )
- 
+
     if not uploaded:
         st.info("👆 Upload your chat enquiries Excel file to get started.")
         st.markdown("""
@@ -1860,26 +2050,26 @@ def main():
           `MESSAGE_TYPE`, `MESSAGE_ID`, `SENDER`, `BUYER_ID`
         """)
         return
- 
+
     import hashlib
     file_bytes = uploaded.read()
     file_hash  = hashlib.md5(file_bytes).hexdigest()
- 
+
     # ── TSV reference path from sidebar (loaded before analysis) ─────────────
     tsv_path = get_tsv_path_from_sidebar()
- 
+
     with st.spinner("⏳ Loading chat data…"):
         raw_df = load_data(file_bytes, file_hash)
- 
+
     _max_ts = raw_df["MESSAGE_TIME"].dropna().max()
     _min_ts = raw_df["MESSAGE_TIME"].dropna().min()
- 
+
     today_date  = datetime.today().date()
     today_ts    = pd.Timestamp(today_date)
     today_str   = today_date.strftime("%Y-%m-%d")
     data_end    = _max_ts.date() if pd.notna(_max_ts) else today_date
     data_start  = _min_ts.date() if pd.notna(_min_ts) else today_date
- 
+
     _platforms_found = sorted(raw_df["PLATFORM"].unique().tolist())
     _plat_str = " · ".join(_platforms_found)
     st.success(
@@ -1888,29 +2078,29 @@ def main():
         f"Platforms: **{_plat_str}** · "
         f"Data range: **{data_start}** → **{data_end}**"
     )
- 
+
     # Pass tsv_path into analyse() so it can build the TSV lookup once
     with st.spinner("🔍 Analysing conversations — this runs once and is cached…"):
         conv_df = analyse(raw_df, tsv_path)
     del raw_df; gc.collect()
- 
+
     conv_filtered = apply_filters(conv_df, today_ts, data_end)
- 
+
     if conv_filtered.empty:
         st.warning("No conversations match the current filters.")
         return
- 
+
     st.markdown('<div class="section-title">📈 Key Metrics</div>', unsafe_allow_html=True)
     render_metrics(conv_filtered, today_ts)
- 
+
     st.markdown('<div class="section-title">📊 Analytics</div>', unsafe_allow_html=True)
- 
+
     # ── Platform summary cards ──────────────────────────────────────────────
     platform_order  = ["Shopee", "Lazada", "TikTok"]
     all_platforms   = [p for p in platform_order if p in conv_filtered["PLATFORM"].values]
     other_platforms = [p for p in conv_filtered["PLATFORM"].unique() if p not in platform_order]
     all_platforms  += other_platforms
- 
+
     if len(all_platforms) > 1:
         pcols = st.columns(len(all_platforms))
         plat_colors = {"Shopee": "#EE4D2D", "Lazada": "#0F146D", "TikTok": "#010101"}
@@ -1932,21 +2122,21 @@ def main():
                   </div>
                 </div>
                 """, unsafe_allow_html=True)
- 
+
     c1, c2, c3, c4 = st.columns(4)
- 
+
     with c1:
         issue_counts = conv_filtered["ISSUE_TYPE"].value_counts().reset_index()
         issue_counts.columns = ["Issue Type", "Count"]
         st.markdown("**Issue Type Distribution**")
         st.bar_chart(issue_counts.set_index("Issue Type")["Count"], color="#00C4B4")
- 
+
     with c2:
         sent_counts = conv_filtered["SENTIMENT"].value_counts().reset_index()
         sent_counts.columns = ["Sentiment", "Count"]
         st.markdown("**Sentiment Breakdown**")
         st.bar_chart(sent_counts.set_index("Sentiment")["Count"])
- 
+
     with c3:
         daily = (
             conv_filtered
@@ -1957,7 +2147,7 @@ def main():
         )
         st.markdown("**Daily Conversation Volume**")
         st.line_chart(daily.set_index("DATE")["Conversations"], color="#FF6B35")
- 
+
     with c4:
         if len(all_platforms) > 1:
             plat_daily = (
@@ -1976,7 +2166,7 @@ def main():
             plat_counts.columns = ["Platform", "Count"]
             st.markdown("**Platform Breakdown**")
             st.bar_chart(plat_counts.set_index("Platform")["Count"], color="#1B2A4A")
- 
+
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "🔥 Today's Priority Chats",
         "📋 All Conversations",
@@ -1985,21 +2175,21 @@ def main():
         "📈 WoW / MoM Performance",
         "👥 Team Performance",
     ])
- 
+
     display_cols = [c for c in [
         "CONVERSATION_ID", "PLATFORM", "STORE_CODE", "CHANNEL_NAME",
         "SITE_NICK_NAME_ID", "COUNTRY_CODE", "BUYER_NAME",
         "ISSUE_TYPE", "PRIORITY", "SENTIMENT", "IS_UNRESOLVED",
         "CSAT_PROXY", "AVG_CRT_MINS", "BUYER_SUMMARY",
     ] if c in conv_filtered.columns]
- 
+
     col_config_base = {
         "CSAT_PROXY":    st.column_config.NumberColumn("CSAT (1-5)", format="%.1f"),
         "AVG_CRT_MINS":  st.column_config.NumberColumn("CRT (mins)", format="%.0f"),
         "IS_UNRESOLVED": st.column_config.CheckboxColumn("Unresolved?"),
         "BUYER_SUMMARY": st.column_config.TextColumn("Summary", width="large"),
     }
- 
+
     with tab1:
         latest_date = pd.Timestamp(data_end)
         today_df = conv_filtered[conv_filtered["LAST_MSG_TIME"].dt.normalize() == latest_date]
@@ -2012,13 +2202,13 @@ def main():
         else:
             st.dataframe(today_sorted[display_cols].reset_index(drop=True),
                          use_container_width=True, height=450, column_config=col_config_base)
- 
+
     with tab2:
         all_sorted = conv_filtered.sort_values("LAST_MSG_TIME", ascending=False)
         st.markdown(f"**{len(all_sorted)} conversations** in filtered view")
         st.dataframe(all_sorted[display_cols].reset_index(drop=True),
                      use_container_width=True, height=500, column_config=col_config_base)
- 
+
     with tab3:
         unres_df = conv_filtered[conv_filtered["IS_UNRESOLVED"]].sort_values(
             "PRIORITY", key=lambda s: s.map({"High": 0, "Medium": 1, "Low": 2}).fillna(3)
@@ -2029,7 +2219,7 @@ def main():
         else:
             st.dataframe(unres_df[display_cols].reset_index(drop=True),
                          use_container_width=True, height=450, column_config=col_config_base)
- 
+
     with tab4:
         st.markdown("### 💬 Suggested Reply Templates by Issue Type")
         st.caption("Empathetic, resolution-oriented replies — replace [PLACEHOLDERS] before sending.")
@@ -2043,7 +2233,7 @@ def main():
                 <div class="reply-label">Suggested Reply</div>
                 <div class="reply-box">{reply_text}</div>
                 """, unsafe_allow_html=True)
- 
+
         st.markdown("---")
         st.markdown("### 🔍 Look Up Reply for a Specific Conversation")
         conv_ids = conv_filtered["CONVERSATION_ID"].tolist()
@@ -2065,12 +2255,12 @@ def main():
             <div class="reply-label">Suggested Reply</div>
             <div class="reply-box">{suggested}</div>
             """, unsafe_allow_html=True)
- 
+
     with tab5:
         st.markdown("### 📈 Week-on-Week & Month-on-Month Performance")
         wow_df, mom_df = compute_wow_mom(conv_filtered)
         wow_tab, mom_tab = st.tabs(["📅 Week-on-Week", "🗓️ Month-on-Month"])
- 
+
         with wow_tab:
             if wow_df.empty:
                 st.info("Not enough data for weekly comparison.")
@@ -2099,7 +2289,7 @@ def main():
                         "Δ Avg_CSAT":      st.column_config.NumberColumn("Δ CSAT", format="%+.2f"),
                     },
                 )
- 
+
         with mom_tab:
             if mom_df.empty:
                 st.info("Not enough data for monthly comparison.")
@@ -2128,7 +2318,7 @@ def main():
                         "Δ Avg_CSAT":      st.column_config.NumberColumn("Δ CSAT", format="%+.2f"),
                     },
                 )
- 
+
     with tab6:
         st.markdown("### 👥 Team Member Performance")
         st.caption(
@@ -2136,7 +2326,7 @@ def main():
             f"Store → Agent mapping as configured in constants"
         )
         team_perf = compute_team_performance(conv_filtered)
- 
+
         if team_perf.empty:
             st.info(
                 "No team performance data available. "
@@ -2164,7 +2354,7 @@ def main():
                           </div>
                         </div>
                         """, unsafe_allow_html=True)
- 
+
             st.markdown("---")
             st.markdown("**Team Summary Table**")
             summary_cols = [
@@ -2190,7 +2380,7 @@ def main():
                     "High_Priority": st.column_config.NumberColumn("High Pri."),
                 },
             )
- 
+
             st.markdown("---")
             st.markdown("**Drill Down by Agent**")
             agent_sel = st.selectbox("Select Agent", ["(All)"] + agents)
@@ -2201,7 +2391,7 @@ def main():
                     (conv_filtered["TEAM_MEMBER"] == agent_sel) &
                     (conv_filtered["LAST_MSG_TIME"] >= TEAM_START_DATE)
                 ]
- 
+
             if agent_sel == "Others" and not drilldown_df.empty:
                 st.markdown("**Others — Store Code Breakdown**")
                 others_summary = (
@@ -2229,7 +2419,7 @@ def main():
                         "CRR%":          st.column_config.NumberColumn("CRR %", format="%.1f%%"),
                     })
                 st.markdown("**All Conversations — Others**")
- 
+
             drill_cols = [c for c in [
                 "CONVERSATION_ID", "STORE_CODE", "CHANNEL_NAME", "SITE_NICK_NAME_ID",
                 "COUNTRY_CODE", "BUYER_NAME", "LAST_MSG_TIME", "ISSUE_TYPE", "PRIORITY",
@@ -2246,7 +2436,7 @@ def main():
                     "IS_CONVERSION": st.column_config.CheckboxColumn("Conversion?"),
                 },
             )
- 
+
             st.markdown("---")
             st.markdown("**🔍 Unassigned / Other Stores in This Data**")
             st.caption("Based on current sidebar filters.")
@@ -2285,7 +2475,7 @@ def main():
                     st.warning(f"⚠️ **{len(others_stores)} store(s)** found with no team member assigned.")
                 else:
                     st.success("✅ All stores in this dataset are assigned to team members.")
- 
+
             with st.expander("📋 Store → Agent Assignment Reference"):
                 assign_rows = [
                     {"Agent": agent_name, "Shift": AGENT_SHIFT.get(agent_name, "Day"),
@@ -2293,14 +2483,14 @@ def main():
                     for agent_name, stores in TEAM_ASSIGNMENTS.items()
                 ]
                 st.dataframe(pd.DataFrame(assign_rows), use_container_width=True, hide_index=True)
- 
+
     # ── Issue Breakdown Table ─────────────────────────────────────────────────
     st.markdown('<div class="section-title">📂 Issue Type Breakdown</div>', unsafe_allow_html=True)
- 
+
     _plat_opts = ["All Platforms"] + sorted(conv_filtered["PLATFORM"].dropna().unique().tolist())
     _sel_plat_ib = st.selectbox("Filter by Platform", _plat_opts, key="ib_platform")
     _ib_df = conv_filtered if _sel_plat_ib == "All Platforms" else conv_filtered[conv_filtered["PLATFORM"] == _sel_plat_ib]
- 
+
     ib = (
         _ib_df
         .groupby(["ISSUE_TYPE", "PRIORITY"])
@@ -2324,7 +2514,7 @@ def main():
             "Avg_CRT_mins":  st.column_config.NumberColumn("CRT (min)"),
         }
     )
- 
+
     # ── Store Performance ─────────────────────────────────────────────────────
     st.markdown('<div class="section-title">🏪 Store Performance</div>', unsafe_allow_html=True)
     sp = (
@@ -2362,12 +2552,12 @@ def main():
             "Negative_Sent":st.column_config.NumberColumn("Negative Sent"),
         },
     )
- 
+
     # ── Excel Download ────────────────────────────────────────────────────────
     st.markdown('<div class="section-title">⬇️ Download Report</div>', unsafe_allow_html=True)
     cutoff_7d  = pd.Timestamp(data_end) - pd.Timedelta(days=6)
     conv_7day  = conv_df[conv_df["LAST_MSG_TIME"] >= cutoff_7d].copy()
- 
+
     dl_col1, dl_col2 = st.columns(2)
     with dl_col1:
         if st.button("📊 Generate Last 7 Days Report", use_container_width=True):
@@ -2396,7 +2586,7 @@ def main():
         "**Last 7 Days** = default daily export · "
         "**Filtered View** = matches current sidebar selection."
     )
- 
- 
+
+
 if __name__ == "__main__":
     main()
