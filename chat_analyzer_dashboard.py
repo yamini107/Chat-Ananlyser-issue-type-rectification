@@ -12,22 +12,13 @@ CHANGES FROM PREVIOUS VERSION
      "cancel" or "refund" were never found inside raw JSON strings,
      causing nearly every conversation to fall through to "Other".
 
-2. TSV-Driven Issue Taxonomy (ENHANCED)
-   - `build_tsv_lookup()` reads the reference TSV at runtime and converts
-     it into a keyword→IssueType dictionary.
-   - TSV issue names are mapped to internal canonical names so existing
-     reply templates, priority levels, and action steps still apply.
-   - TSV keywords are checked FIRST before the legacy ISSUE_KEYWORDS dict;
-     this gives the reference data priority and fixes misclassifications
-     for Delay/Shipment, Promotions, Size, Exchange, and Invoice.
-
-3. Scoring-based Classification (IMPROVED)
-   - Both TSV keywords and legacy keywords contribute weighted scores.
-   - TSV matches earn weight 2 (higher precision); legacy matches earn
-     weight 1. The issue with the highest cumulative score wins.
+2. Scoring-based Classification (IMPROVED)
+   - Buyer text is matched against the ISSUE_KEYWORDS dictionary; every
+     matching keyword contributes weight 1 to that issue type's score.
+   - The issue type with the highest cumulative score wins.
    - Ties broken by priority order (High > Medium > Low).
 
-4. Unresolved Chat Detection (IMPROVED)
+3. Unresolved Chat Detection (IMPROVED)
    - Previous logic only checked seller messages for stalling/resolution
      patterns in raw JSON strings — patterns were never matching.
    - `conversation_is_unresolved()` now receives pre-parsed seller texts.
@@ -37,11 +28,7 @@ CHANGES FROM PREVIOUS VERSION
    - Auto-replies (bot greetings, chatbot messages) are now excluded from
      both stall detection and resolution detection to avoid false positives.
 
-5. Platform-Aware TSV Loading (NEW)
-   - TSV path can be configured via `TSV_REFERENCE_PATH` constant.
-   - If TSV is not found, the system silently falls back to legacy keywords.
-
-6. Expanded Keyword Coverage & Refined Priority (NEW — this version)
+4. Expanded Keyword Coverage & Refined Priority (NEW — this version)
    - ISSUE_KEYWORDS has been extended with a large multilingual keyword set
      (English / Thai / Bahasa / Tagalog / Chinese) sourced from the latest
      reference keyword sheet, covering Refund, Return, Cancellation, Delay,
@@ -61,22 +48,8 @@ CHANGES FROM PREVIOUS VERSION
 
 ASSUMPTIONS
 ───────────
-- TSV Issue Types are mapped to internal names as follows:
-    "Shipment status"     → "Delay"
-    "Order status"        → "Delay"
-    "Cancellation request"→ "Cancellation"
-    "change request"      → "Cancellation"   (order modification)
-    "Restock"             → "Product Inquiry"
-    "size recommendation" → "Product Inquiry"
-    "Return & refund"     → "Return"          (refund intent detected separately)
-    "exchange"            → "Return"
-    "parcel damaged"      → "Damaged/Wrong Item"
-    "product query"       → "Product Inquiry"
-    "promotions"          → "Promotion Issue"
-    "Invoice"             → "Payment Issue"
-    "Product quality"     → "Damaged/Wrong Item"
-- "too big" / "too small" / "fit" from the TSV are mapped to "Return"
-  (size-related returns) rather than "Product Inquiry".
+- "too big" / "too small" / "doesn't fit" style keywords are mapped to
+  "Return" (size-related returns) rather than "Product Inquiry".
 - Messages that are purely media (images, order cards, item cards) with
   no extractable text are skipped during issue classification.
 - Escalation keywords (fraud, hacked account, legal/chargeback threats,
@@ -254,37 +227,7 @@ section[data-testid="stSidebar"] strong { color: #00C4B4 !important; }
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Path to the TSV reference file — can be overridden via environment variable.
-# Place the TSV in the same directory as this script or set the env var.
-TSV_REFERENCE_PATH = os.environ.get(
-    "CHAT_ANALYZER_TSV",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "table__2_.tsv"),
-)
-
-# ── Mapping from TSV issue names → internal canonical issue type names ────────
-# Assumption: TSV uses business-friendly labels; we map them to the names used
-# throughout this app (reply templates, priority map, action steps, etc.)
-TSV_TO_INTERNAL = {
-    "shipment status":      "Delay",
-    "order status":         "Delay",
-    "cancellation request": "Cancellation",
-    "change request":       "Cancellation",       # order modification = cancel-type
-    "restock":              "Product Inquiry",
-    "size recommendation":  "Product Inquiry",
-    "return & refund":      "Return",              # refined per-keyword below
-    "exchange":             "Return",
-    "parcel damaged":       "Damaged/Wrong Item",
-    "product query":        "Product Inquiry",
-    "promotions":           "Promotion Issue",
-    "invoice":              "Payment Issue",
-    "product quality":      "Damaged/Wrong Item",
-}
-
-# Keywords from TSV "Return & refund" that should map to Refund, not Return
-# (when these appear, override the TSV mapping from "Return" → "Refund")
-_TSV_REFUND_OVERRIDE_KWS = {"refund"}
-
-# ── Legacy keyword dictionary (internal fallback, weight=1) ──────────────────
+# ── Issue keyword dictionary (weight=1 per match) ─────────────────────────────
 # CHANGE: expanded keyword lists based on real message samples observed in the
 # uploaded chat data (JSON-unwrapped buyer messages).
 #
@@ -325,7 +268,7 @@ ISSUE_KEYWORDS = {
         "delay", "late", "slow", "ช้า", "lambat", "belum sampai", "haven't received",
         "not arrived", "waiting", "รอนาน", "still waiting", "lama", "terlambat",
         "overdue", "not delivered yet", "ยังไม่ได้รับ", "belum diterima",
-        # NEW — shipment-status keywords from TSV
+        # NEW — shipment-status keywords
         "ship", "delivery", "shipping", "status", "when will receive",
         "receive by today", "ship out", "when will my item be shipped",
         "has it been shipped", "shipped out", "shipped yet",
@@ -345,7 +288,7 @@ ISSUE_KEYWORDS = {
         "สินค้าผิด", "ของเสีย", "ของแตก", "ของชำรุด", "rusak", "cacat",
         "salah barang", "salah produk", "not as described", "different item",
         "wrong size", "wrong colour", "wrong color", "different from picture",
-        # NEW — product quality keywords from TSV
+        # NEW — product quality keywords
         "defected", "sole separation", "deviate", "damaged box", "damaged product",
         "dah pakai", "mcm dah pakai", "kotor", "looks used", "old stock",
         # NEW — reference keyword sheet additions
@@ -381,7 +324,7 @@ ISSUE_KEYWORDS = {
         "สี", "colour", "color", "spec", "specification", "ingredient",
         "cara pakai", "ukuran", "warna", "harga", "stok", "stock", "available",
         "variant", "model", "version",
-        # NEW — restock & size recommendation keywords from TSV
+        # NEW — restock & size recommendation keywords
         "when will be available", "product available", "size available",
         "color available", "restock", "uk", "us", "euro",
         "what size should i take", "waterproof", "will be fit", "warranty",
@@ -401,7 +344,7 @@ ISSUE_KEYWORDS = {
         "voucher", "promo", "discount", "coupon", "code", "sale", "offer",
         "โปรโมชั่น", "ส่วนลด", "โค้ด", "diskon", "kode promo", "cashback",
         "flash sale", "deal", "bundle",
-        # NEW — TSV promotion keywords
+        # NEW — promotion keywords
         "live", "vouchers",
         # NEW — reference keyword sheet additions
         "voucher code", "promo code", "discount code", "coupon code",
@@ -825,58 +768,6 @@ ACTION_STEPS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TSV REFERENCE LOADER
-# ─────────────────────────────────────────────────────────────────────────────
-
-@st.cache_data(show_spinner=False)
-def build_tsv_lookup(tsv_path: str) -> dict:
-    """
-    Load the TSV reference file and return a dict:
-        {keyword_lower: canonical_issue_type}
-
-    The TSV has two columns:
-        Issue type  | Key words
-    Issue type uses forward-fill (only first row per group has a value).
-
-    Returns an empty dict if the file is not found or cannot be parsed.
-    This ensures the app degrades gracefully when no TSV is provided.
-    """
-    if not tsv_path or not os.path.exists(tsv_path):
-        return {}
-
-    try:
-        df = pd.read_csv(tsv_path, sep="\t", dtype=str)
-        # Normalise column names — tolerate minor variations
-        df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-        issue_col = next((c for c in df.columns if "issue" in c), None)
-        kw_col    = next((c for c in df.columns if "key" in c or "word" in c), None)
-        if not issue_col or not kw_col:
-            return {}
-
-        df[issue_col] = df[issue_col].ffill().str.strip().str.lower()  # ffill() replaces deprecated fillna(method="ffill") for pandas 3.x compatibility
-        df[kw_col]    = df[kw_col].fillna("").str.strip().str.lower()
-
-        lookup = {}
-        for _, row in df.iterrows():
-            tsv_label = row[issue_col]
-            kw        = row[kw_col]
-            if not kw:
-                continue
-            internal = TSV_TO_INTERNAL.get(tsv_label)
-            if not internal:
-                continue
-            # Override: keywords that indicate Refund within "Return & refund" group
-            if tsv_label == "return & refund" and kw in _TSV_REFUND_OVERRIDE_KWS:
-                internal = "Refund"
-            lookup[kw] = internal
-
-        return lookup
-
-    except Exception:
-        return {}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # MESSAGE TEXT EXTRACTION  (NEW)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -974,32 +865,29 @@ def detect_sentiment(text: str) -> str:
     return "Neutral"
 
 
-def detect_issue_type(text: str, tsv_lookup: dict | None = None) -> str:
+def detect_issue_type(text: str) -> str:
     """
     Classify buyer message text into an issue type.
 
-    IMPROVED LOGIC:
-    1. TSV keywords are checked first with weight=2 (higher precision source).
-    2. Legacy ISSUE_KEYWORDS are checked with weight=1.
-    3. The issue type with the highest cumulative score wins.
-    4. On ties, priority order (High > Medium > Low) breaks the tie.
-    5. Returns "Other" if no keywords matched.
+    LOGIC:
+    1. ISSUE_KEYWORDS is checked; every matching keyword contributes weight=1
+       to that issue type's cumulative score.
+    2. The issue type with the highest cumulative score wins.
+    3. On ties, priority order (High > Medium > Low) breaks the tie.
+    4. Returns "Other" if no keywords matched.
 
-    NOTE: ISSUE_KEYWORDS now carries a substantially expanded, multilingual
+    NOTE: ISSUE_KEYWORDS carries a substantially expanded, multilingual
     keyword set (see constants section) covering many more real-world phrasings
     per issue type. This function's matching logic is unchanged — it still does
     a case-insensitive substring match — but with more keywords available,
     far fewer genuine buyer issues will fail to match any keyword and fall
     through to "Other". "Other" is only returned when truly no keyword from
-    any issue type (TSV or legacy) is found in the buyer's message.
+    any issue type is found in the buyer's message.
 
     Parameters
     ----------
     text : str
         Pre-extracted plain text from buyer messages (not raw JSON).
-    tsv_lookup : dict | None
-        Mapping of {keyword_lower: canonical_issue_type} built from the TSV.
-        If None or empty, only legacy keywords are used.
     """
     if not isinstance(text, str) or not text.strip():
         return "Other"
@@ -1007,13 +895,7 @@ def detect_issue_type(text: str, tsv_lookup: dict | None = None) -> str:
 
     scores: dict[str, float] = {}
 
-    # ── Step 1: TSV keywords (weight=2) ──────────────────────────────────────
-    if tsv_lookup:
-        for kw, issue in tsv_lookup.items():
-            if kw and kw in t:
-                scores[issue] = scores.get(issue, 0) + 2
-
-    # ── Step 2: Legacy keywords (weight=1) ────────────────────────────────────
+    # ── Match against ISSUE_KEYWORDS (weight=1 per matching keyword) ─────────
     for issue, kws in ISSUE_KEYWORDS.items():
         for kw in kws:
             if kw.lower() in t:
@@ -1022,7 +904,7 @@ def detect_issue_type(text: str, tsv_lookup: dict | None = None) -> str:
     if not scores:
         return "Other"
 
-    # ── Step 3: Break ties by priority (High wins) ────────────────────────────
+    # ── Break ties by priority (High wins) ────────────────────────────────────
     priority_order = {"High": 0, "Medium": 1, "Low": 2}
     max_score = max(scores.values())
     tied = [iss for iss, sc in scores.items() if sc == max_score]
@@ -1544,13 +1426,12 @@ def load_data(file_bytes: bytes, _file_hash: str = "") -> pd.DataFrame:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, max_entries=1)
-def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
+def analyse(df: pd.DataFrame) -> pd.DataFrame:
     """
     Conversation-level analysis engine.
 
     CHANGE: Passes pre-parsed plain-text messages to detect_issue_type()
     and conversation_is_unresolved() instead of raw JSON blobs.
-    The tsv_lookup is built once and reused for all conversations.
 
     NEW: `get_priority()` is now called with the conversation's buyer text
     as well as its Issue Type, so High-priority escalation keywords (fraud,
@@ -1559,9 +1440,6 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
     the Issue Type itself would normally resolve to Medium/Low. Issue Type
     detection itself is unchanged.
     """
-    # ── Load TSV reference once ───────────────────────────────────────────────
-    tsv_lookup = build_tsv_lookup(tsv_path) if tsv_path else {}
-
     df = df.copy()
     df["_sender_lower"] = df["SENDER"].str.lower().fillna("")
     df_sorted = df.sort_values(["CONVERSATION_ID", "MESSAGE_TIME"])
@@ -1576,10 +1454,7 @@ def analyse(df: pd.DataFrame, tsv_path: str = "") -> pd.DataFrame:
         .apply(lambda msgs: " ".join(m for m in msgs if isinstance(m, str) and m.strip()))
     )
 
-    # Pass tsv_lookup to the issue detector
-    issue_map     = buyer_text_per_conv.apply(
-        lambda txt: detect_issue_type(txt, tsv_lookup)
-    )
+    issue_map     = buyer_text_per_conv.apply(detect_issue_type)
     sentiment_map = buyer_text_per_conv.apply(detect_sentiment)
 
     meta_cols = ["PLATFORM", "STORE_CODE", "SITE_NICK_NAME_ID", "CHANNEL_NAME",
@@ -1982,49 +1857,6 @@ def apply_filters(conv_df: pd.DataFrame, today_ts: pd.Timestamp, data_end=None) 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TSV UPLOAD SIDEBAR WIDGET  (NEW)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_tsv_path_from_sidebar() -> str:
-    """
-    Allow users to upload a TSV reference file via the sidebar.
-    Returns the path to the TSV to use, or the default path if none uploaded.
-    """
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📋 Reference TSV (Optional)")
-    st.sidebar.caption(
-        "Upload the Issue Type → Keywords mapping TSV to improve classification accuracy."
-    )
-    tsv_file = st.sidebar.file_uploader(
-        "Upload TSV Reference File",
-        type=["tsv", "txt", "csv"],
-        key="tsv_uploader",
-        help="Two-column TSV: 'Issue type' | 'Key words'. Upload the same reference table used to configure this dashboard.",
-    )
-
-    if tsv_file is not None:
-        # Save uploaded TSV to a temp file that build_tsv_lookup can read
-        tsv_tmp = "/tmp/chat_analyzer_ref.tsv"
-        with open(tsv_tmp, "wb") as f:
-            f.write(tsv_file.read())
-        tsv_lookup = build_tsv_lookup(tsv_tmp)
-        if tsv_lookup:
-            st.sidebar.success(f"✅ TSV loaded — {len(tsv_lookup)} keyword mappings active")
-        else:
-            st.sidebar.warning("⚠️ TSV uploaded but no valid mappings found. Check column names.")
-        return tsv_tmp
-
-    # Fall back to default path (file next to the script)
-    if os.path.exists(TSV_REFERENCE_PATH):
-        lookup = build_tsv_lookup(TSV_REFERENCE_PATH)
-        if lookup:
-            st.sidebar.info(f"ℹ️ Using bundled TSV — {len(lookup)} keyword mappings active")
-        return TSV_REFERENCE_PATH
-
-    return ""
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # MAIN APP
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2055,9 +1887,6 @@ def main():
     file_bytes = uploaded.read()
     file_hash  = hashlib.md5(file_bytes).hexdigest()
 
-    # ── TSV reference path from sidebar (loaded before analysis) ─────────────
-    tsv_path = get_tsv_path_from_sidebar()
-
     with st.spinner("⏳ Loading chat data…"):
         raw_df = load_data(file_bytes, file_hash)
 
@@ -2079,9 +1908,8 @@ def main():
         f"Data range: **{data_start}** → **{data_end}**"
     )
 
-    # Pass tsv_path into analyse() so it can build the TSV lookup once
     with st.spinner("🔍 Analysing conversations — this runs once and is cached…"):
-        conv_df = analyse(raw_df, tsv_path)
+        conv_df = analyse(raw_df)
     del raw_df; gc.collect()
 
     conv_filtered = apply_filters(conv_df, today_ts, data_end)
