@@ -840,7 +840,17 @@ def extract_plain_text(raw_msg: str) -> str:
     Shopee uses {"text": "...", "translation": {...}}.
     TikTok uses {"content": "..."} or {"order_id": "..."}.
 
-    Returns a clean plain-text string (may be empty for media-only messages).
+    UPDATED: widened to also recognise "message", "body", "caption", "desc",
+    "description", "msg", "summary", "content_text", "message_text" as text
+    fields, and to recurse into nested containers ("ext", "data", "payload",
+    "item", "extra", or a list of message blocks) so more real message text
+    is captured. Previously, messages using any of these less-common shapes
+    came back as an empty string and were then unavoidably classified as
+    "Other" downstream — this reduces that failure mode without touching
+    the classification logic itself.
+
+    Returns a clean plain-text string (may be empty for genuinely
+    media-only messages with no text anywhere in the blob).
     """
     if not isinstance(raw_msg, str) or not raw_msg.strip():
         return ""
@@ -856,53 +866,112 @@ def extract_plain_text(raw_msg: str) -> str:
         # Partial / malformed JSON — try direct text extraction
         return _regex_extract_text(stripped)
 
-    if not isinstance(obj, dict):
+    return _extract_from_obj(obj)
+
+
+# Text-ish field names to look for, in priority order, across platforms.
+_TEXT_FIELD_NAMES = (
+    "txt", "text", "content", "message", "body", "caption",
+    "desc", "description", "msg", "summary", "content_text", "message_text",
+)
+
+# Container field names that may hold a nested message structure.
+_NESTED_CONTAINER_NAMES = ("ext", "data", "payload", "item", "extra", "detail")
+
+
+def _extract_from_obj(obj, depth: int = 0, permissive: bool = False) -> str:
+    """
+    Recursively search a parsed JSON value (dict / list / str) for the first
+    usable piece of message text.
+
+    At the top level (permissive=False) only _TEXT_FIELD_NAMES /
+    _NESTED_CONTAINER_NAMES are considered, so we never accidentally grab
+    unrelated metadata (order_id, user_id, timestamps, etc.) as "message text".
+
+    Once we've unwrapped into something already known to be a text-carrying
+    value — e.g. a Lazada `txt` field that is itself a JSON object of
+    translations like {"th": "...", "en": "..."}, or a known nested
+    container (`ext`/`data`/`payload`/...) — we switch to permissive=True,
+    which additionally falls back to the first non-empty string found among
+    ANY of that dict's values (matching the previous, simpler behavior for
+    these already-scoped nested objects).
+
+    Depth-limited to avoid runaway recursion on pathological/self-referential
+    structures.
+    """
+    if depth > 4:
         return ""
 
-    # ── Priority order of text fields across platforms ────────────────────────
-    for key in ("txt", "text", "content"):
-        val = obj.get(key)
-        if isinstance(val, str) and val.strip():
-            # Lazada txt may itself be a JSON object {"th": "...", "en": "..."}
-            if val.strip().startswith("{"):
-                inner = _try_json_values(val)
-                if inner:
-                    return inner
-            return val.strip()
+    if isinstance(obj, str):
+        return obj.strip()
 
-    # ── Lazada ext field: stringified JSON with a "summary" key ──────────────
-    ext_raw = obj.get("ext")
-    if isinstance(ext_raw, str) and ext_raw.strip().startswith("{"):
-        try:
-            ext_obj = json.loads(ext_raw)
-            for k in ("summary", "txt", "text", "content"):
-                v = ext_obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-        except (json.JSONDecodeError, ValueError):
-            pass
+    if isinstance(obj, list):
+        for item in obj:
+            found = _extract_from_obj(item, depth + 1, permissive)
+            if found:
+                return found
+        return ""
 
-    # ── Nothing useful extracted ───────────────────────────────────────────────
-    return ""
+    if isinstance(obj, dict):
+        # ── Direct text fields first ──────────────────────────────────────────
+        for key in _TEXT_FIELD_NAMES:
+            val = obj.get(key)
+            if isinstance(val, str) and val.strip():
+                # Value may itself be JSON (e.g. Lazada txt = {"th": "...", "en": "..."})
+                if val.strip().startswith("{") or val.strip().startswith("["):
+                    try:
+                        inner = _extract_from_obj(json.loads(val), depth + 1, permissive=True)
+                    except (json.JSONDecodeError, ValueError):
+                        inner = ""
+                    if inner:
+                        return inner
+                    continue
+                return val.strip()
+            if isinstance(val, (dict, list)):
+                found = _extract_from_obj(val, depth + 1, permissive)
+                if found:
+                    return found
 
+        # ── Nested containers (may be stringified JSON or a raw object) ──────
+        for key in _NESTED_CONTAINER_NAMES:
+            val = obj.get(key)
+            if isinstance(val, str) and val.strip().startswith("{"):
+                try:
+                    found = _extract_from_obj(json.loads(val), depth + 1, permissive=True)
+                    if found:
+                        return found
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif isinstance(val, (dict, list)):
+                found = _extract_from_obj(val, depth + 1, permissive=True)
+                if found:
+                    return found
 
-def _try_json_values(s: str) -> str:
-    """Try to parse a JSON string and return the first non-empty string value."""
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            for v in obj.values():
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-    except (json.JSONDecodeError, ValueError):
-        pass
+        # ── Permissive fallback: this dict is already known to be a scoped
+        # text-carrying value (e.g. a translation map {"en": ..., "th": ...}),
+        # so grab the first non-empty string value regardless of key name. ──
+        if permissive:
+            for val in obj.values():
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+                if isinstance(val, (dict, list)):
+                    found = _extract_from_obj(val, depth + 1, permissive=True)
+                    if found:
+                        return found
+
+        return ""
+
     return ""
 
 
 def _regex_extract_text(s: str) -> str:
     """Fallback: extract quoted text values from a JSON-like string via regex."""
-    # Match values for common keys: txt, text, content, summary
-    m = re.search(r'"(?:txt|text|content|summary)"\s*:\s*"([^"]{3,})"', s, re.IGNORECASE)
+    # Match values for common text-ish keys (same set as _TEXT_FIELD_NAMES)
+    m = re.search(
+        r'"(?:txt|text|content|message|body|caption|desc|description|msg|'
+        r'summary|content_text|message_text)"\s*:\s*"([^"]{2,})"',
+        s, re.IGNORECASE,
+    )
     if m:
         return m.group(1).replace("\\n", " ").replace('\\"', '"').strip()
     return ""
@@ -1014,8 +1083,15 @@ def get_priority(issue_type: str, text: str | None = None) -> str:
     `text` is optional and defaults to None, so every existing call site that
     calls `get_priority(issue_type)` without a text argument continues to
     work exactly as before (base PRIORITY_MAP lookup only).
+
+    FIX: escalation is intentionally skipped when issue_type == "Other". No
+    Issue Type keyword matched in that case, so we can't be confident the
+    escalation phrase is meaningfully connected to a real, classifiable
+    issue rather than incidental wording. This also prevents "Other" from
+    ever splitting into two separate priority buckets (Other/Low and
+    Other/High) in breakdown tables — "Other" is always Low.
     """
-    if text is not None and _has_escalation_keyword(text):
+    if issue_type != "Other" and text is not None and _has_escalation_keyword(text):
         return "High"
     for priority, issues in PRIORITY_MAP.items():
         if issue_type in issues:
