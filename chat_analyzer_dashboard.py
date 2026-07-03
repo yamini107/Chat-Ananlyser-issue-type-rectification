@@ -1260,7 +1260,10 @@ def compute_team_performance(conv_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     perf = (
-        df.groupby("TEAM_MEMBER")
+        # FIX: TEAM_MEMBER is category dtype — observed=True prevents
+        # phantom zero-conversation rows for agents/categories not present
+        # in this (possibly filtered) subset.
+        df.groupby("TEAM_MEMBER", observed=True)
         .agg(
             Conversations=("CONVERSATION_ID", "count"),
             Resolved=("IS_RESOLVED", "sum"),
@@ -1274,6 +1277,7 @@ def compute_team_performance(conv_df: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+    perf = perf[perf["Conversations"] > 0]
     perf["CRR_%"]        = (perf["Resolved"] / perf["Conversations"] * 100).round(1)
     perf["Avg_CSAT"]     = perf["Avg_CSAT"].round(2)
     perf["Avg_CRT_mins"] = perf["Avg_CRT_mins"].round(1)
@@ -2359,7 +2363,9 @@ def main():
             if agent_sel == "Others" and not drilldown_df.empty:
                 st.markdown("**Others — Store Code Breakdown**")
                 others_summary = (
-                    drilldown_df.groupby("STORE_CODE")
+                    # FIX: STORE_CODE is category dtype — observed=True
+                    # prevents phantom zero-conversation store rows.
+                    drilldown_df.groupby("STORE_CODE", observed=True)
                     .agg(
                         Conversations=("CONVERSATION_ID", "count"),
                         Unresolved=("IS_UNRESOLVED", "sum"),
@@ -2368,8 +2374,9 @@ def main():
                         Country=("COUNTRY_CODE", lambda x: x.mode().iloc[0] if not x.empty else "—"),
                     )
                     .reset_index()
-                    .sort_values("Conversations", ascending=False)
                 )
+                others_summary = others_summary[others_summary["Conversations"] > 0]
+                others_summary = others_summary.sort_values("Conversations", ascending=False)
                 others_summary["Avg_CSAT"] = others_summary["Avg_CSAT"].round(1)
                 others_summary["CRR%"] = (
                     (others_summary["Conversations"] - others_summary["Unresolved"])
@@ -2457,7 +2464,14 @@ def main():
 
     ib = (
         _ib_df
-        .groupby(["ISSUE_TYPE", "PRIORITY"])
+        # FIX: ISSUE_TYPE and PRIORITY are category dtype. Without
+        # observed=True, groupby on categorical columns produces every
+        # possible (Issue Type × Priority) combination — including ones
+        # that never occur in the data (e.g. "Other" paired with a
+        # Priority it can never have) — as extra zero-count rows. That is
+        # what caused "Other" (and potentially other issue types) to show
+        # up more than once in this breakdown table.
+        .groupby(["ISSUE_TYPE", "PRIORITY"], observed=True)
         .agg(
             Count=("CONVERSATION_ID", "count"),
             Unresolved=("IS_UNRESOLVED", "sum"),
@@ -2465,8 +2479,10 @@ def main():
             Avg_CRT_mins=("AVG_CRT_MINS", "mean"),
         )
         .reset_index()
-        .sort_values("Count", ascending=False)
     )
+    # Safety net: never show a row with zero conversations, regardless of
+    # pandas version / groupby behavior.
+    ib = ib[ib["Count"] > 0].sort_values("Count", ascending=False)
     ib["Avg_CSAT"]     = ib["Avg_CSAT"].round(1)
     ib["Avg_CRT_mins"] = ib["Avg_CRT_mins"].round(0).fillna(0).astype(int)
     ib["Unresolved"]   = ib["Unresolved"].astype(int)
@@ -2483,7 +2499,8 @@ def main():
     st.markdown('<div class="section-title">🏪 Store Performance</div>', unsafe_allow_html=True)
     sp = (
         conv_filtered
-        .groupby(["STORE_CODE", "PLATFORM", "COUNTRY_CODE"])
+        # FIX: same categorical-groupby phantom-row issue as above.
+        .groupby(["STORE_CODE", "PLATFORM", "COUNTRY_CODE"], observed=True)
         .agg(
             Conversations=("CONVERSATION_ID", "count"),
             Unresolved=("IS_UNRESOLVED", "sum"),
@@ -2492,8 +2509,8 @@ def main():
             Negative_Sent=("SENTIMENT", lambda x: (x == "Negative").sum()),
         )
         .reset_index()
-        .sort_values("Conversations", ascending=False)
     )
+    sp = sp[sp["Conversations"] > 0].sort_values("Conversations", ascending=False)
     sp["Avg_CSAT"]     = sp["Avg_CSAT"].round(1)
     sp["Avg_CRT_mins"] = sp["Avg_CRT_mins"].round(0).fillna(0).astype(int)
     sp["Unresolved"]   = sp["Unresolved"].astype(int)
