@@ -242,18 +242,27 @@ ISSUE_KEYWORDS = {
         "refund", "คืนเงิน", "pengembalian dana", "dana kembali", "ibalik", "irefund",
         "bayar balik", "money back", "reimburse", "reimbursement",
         "kembalikan uang", "uang kembali",
-        # NEW — reference keyword sheet additions
         "refunded", "refunds", "money return", "return money", "refund request",
         "bayaran balik", "pulangkan duit", "คืนเงินให้",
+        "not refunded yet", "refund status", "refund pending", "waiting for refund",
+        "belum refund", "belum dapat refund", "refund belum masuk",
+        "dana belum masuk", "refund not received", "when will i get my refund",
+        "refund delay", "yet to receive refund", "refund amount wrong",
+        "partial refund", "how long does refund take", "เงินยังไม่เข้า",
+        "ยังไม่ได้รับเงินคืน", "รอเงินคืน",
     ],
     "Return": [
         "return", "คืนสินค้า", "retur", "rma", "send back", "ส่งคืน", "kembalikan",
         "return item", "product return", "too big", "too small", "doesn't fit",
         "wrong fit", "size issue", "exchange", "change of size",
-        # NEW — reference keyword sheet additions
         "want to return", "how to return", "return policy", "returning", "returned",
         "return request", "return process", "pengembalian barang",
         "ส่งของคืน", "คืนของ", "ส่งคืนสินค้า",
+        "how do i send back", "drop off return", "courier pickup",
+        "collect the item", "schedule pickup", "return label", "return shipping",
+        "print label", "restock fee", "unopened item", "unused item",
+        "cara retur", "proses pengembalian", "ต้องคืนของยังไง",
+        "ส่งของคืนยังไง", "นัดรับของคืน",
     ],
     "Cancellation": [
         "cancel", "cancelled", "ยกเลิก", "batalkan", "batal", "cancellation",
@@ -263,6 +272,11 @@ ISSUE_KEYWORDS = {
         "want to cancel", "how to cancel", "canceling", "cancelling", "pembatalan",
         "batalkan pesanan", "cancel my order", "stop order", "cancel purchase",
         "ยกเลิกออเดอร์",
+        # NEW — additional real-world phrasing
+        "order cancelled by seller", "seller cancelled", "auto cancel",
+        "system cancelled", "order got cancelled", "why was my order cancelled",
+        "unable to cancel", "can't cancel", "no cancel button",
+        "tidak bisa batal", "ไม่สามารถยกเลิก", "ยกเลิกไม่ได้",
     ],
     "Delay": [
         "delay", "late", "slow", "ช้า", "lambat", "belum sampai", "haven't received",
@@ -282,6 +296,13 @@ ISSUE_KEYWORDS = {
         "makakarating", "makaabot", "kailan kaya", "delivery status",
         "order update", "ยังไม่มา", "ยังไม่ถึง", "สถานะพัสดุ",
         "เมื่อไหร่จะได้รับ", "รอสินค้า",
+        # NEW — additional real-world phrasing
+        "out for delivery", "in transit", "stuck at warehouse", "stuck in transit",
+        "no movement", "not moving", "no update on tracking",
+        "tracking not updating", "held at customs", "customs clearance",
+        "returned to sender", "failed delivery attempt", "courier didn't come",
+        "driver did not arrive", "not yet dispatch", "belum dikirim",
+        "belum di proses", "รอจัดส่ง", "พัสดุค้าง", "พัสดุไม่ขยับ",
     ],
     "Damaged/Wrong Item": [
         "wrong item", "wrong product", "damaged", "broken", "defective",
@@ -297,6 +318,12 @@ ISSUE_KEYWORDS = {
         "tama po ang variation", "make sure tama", "tampered", "torn", "dented",
         "cracked", "leaking", "expired", "kadaluarsa", "expire", "salah variasi",
         "หมดอายุ", "สินค้าไม่ตรง", "ผิดสินค้า", "สินค้าเสีย", "สินค้าแตก",
+        # NEW — additional real-world phrasing
+        "item arrived broken", "packaging damaged", "item spoiled", "moldy",
+        "smell bad", "missing parts", "parts missing", "doesn't work properly",
+        "malfunctioning", "stitching came off", "peeling", "discoloured",
+        "discolored", "scratched", "dirty item", "rusty", "barang rosak",
+        "barang cacat", "สินค้ามีตำหนิ", "สินค้าเป็นรอย",
     ],
     "Missing Item": [
         "missing", "not received", "didn't receive", "never received",
@@ -306,6 +333,11 @@ ISSUE_KEYWORDS = {
         "empty box", "no item", "not inside", "not in the box", "missing product",
         "barang tidak ada", "barang kurang", "tidak lengkap", "never got",
         "ไม่ครบ", "ของไม่ครบ", "ขาด",
+        # NEW — additional real-world phrasing
+        "only received one item", "received less than ordered", "quantity wrong",
+        "short shipped", "one item missing from order", "box was light",
+        "seal broken", "kurang barang", "jumlah tidak sesuai", "ได้ของไม่ครบ",
+        "ได้รับของไม่ครบตามจำนวน",
     ],
     "Payment Issue": [
         "payment", "ชำระเงิน", "bayar", "pembayaran", "charge", "double charge",
@@ -318,6 +350,12 @@ ISSUE_KEYWORDS = {
         "credit card", "gagal bayar", "pembayaran gagal", "tax invoice",
         "การชำระเงิน", "ชำระเงินไม่ได้", "ชำระไม่ได้", "จ่ายไม่ได้", "โอนไม่ได้",
         "ใบกำกับภาษี",
+        # NEW — additional real-world phrasing
+        "money deducted but no order", "payment deducted but order not placed",
+        "refund to bank", "bank not received", "wrong bank account",
+        "payment pending", "still processing payment", "cod problem",
+        "cash on delivery issue", "belum dapat resit", "หักเงินแล้วแต่ไม่ได้ออเดอร์",
+        "เงินหักแล้วแต่ไม่มีออเดอร์",
     ],
     "Product Inquiry": [
         "how to", "how do", "วิธีใช้", "ราคา", "price", "size", "ขนาด",
@@ -339,6 +377,11 @@ ISSUE_KEYWORDS = {
         "manufacture date", "authentic", "genuine", "dimension", "dimensions",
         "recommend", "สอบถาม", "อยากรู้", "อยากทราบ", "ขอถาม", "ยังมี",
         "มีไหม", "มีขาย", "มีสต็อก", "สต็อค", "สินค้ามีไหม", "库存", "有库存",
+        # NEW — additional real-world phrasing
+        "compatible with", "what material", "material of", "washable",
+        "machine wash", "care instructions", "how many pieces", "set of how many",
+        "included in the box", "what's inside the box", "bahan apa",
+        "cuci pakai apa", "ส่วนประกอบ", "ซักได้ไหม", "ผ้าอะไร",
     ],
     "Promotion Issue": [
         "voucher", "promo", "discount", "coupon", "code", "sale", "offer",
@@ -354,6 +397,11 @@ ISSUE_KEYWORDS = {
         "freebie", "bundle deal", "buy 1 get 1", "b1g1", "free shipping",
         "reward", "rebate", "campaign", "ใช้โค้ดไม่ได้", "โค้ดใช้ไม่ได้",
         "ของแถม", "แถม", "กิจกรรม",
+        # NEW — additional real-world phrasing
+        "member discount", "first purchase discount", "app exclusive",
+        "seller voucher", "shop voucher", "platform voucher", "minimum spend",
+        "min spend not met", "voucher expired", "code expired", "kode kadaluarsa",
+        "โค้ดหมดอายุ", "ส่วนลดหมดอายุ",
     ],
     "Technical Issue": [
         "error", "bug", "cannot", "can't", "unable", "failed", "not working",
@@ -365,6 +413,11 @@ ISSUE_KEYWORDS = {
         "access denied", "aplikasi error", "tidak bisa login",
         "tidak bisa checkout", "glitch", "crash", "loading",
         "ระบบขัดข้อง", "ระบบล่ม", "เข้าไม่ได้",
+        # NEW — additional real-world phrasing
+        "app keeps crashing", "page keeps loading", "can't upload",
+        "cannot upload", "can't checkout", "payment gateway error",
+        "otp not received", "verification code not received",
+        "tidak menerima otp", "ไม่ได้รับ otp", "ระบบค้าง",
     ],
     "Complaint": [
         "complain", "complaint", "terrible", "horrible", "awful", "worst",
@@ -380,6 +433,11 @@ ISSUE_KEYWORDS = {
         "request_proper_packaging", "unhappy", "angry", "upset", "dissatisfied",
         "rude", "unprofessional", "scam", "fraud", "cheat", "ignored",
         "แย่มาก", "บริการแย่",
+        # NEW — additional real-world phrasing
+        "will not buy again", "never shopping here again", "never buying again",
+        "reporting to platform", "escalate to platform", "taking this further",
+        "very unprofessional", "extremely disappointed", "not satisfied at all",
+        "sangat tidak puas", "จะไม่ซื้ออีกแล้ว", "ไม่ซื้อแล้ว",
     ],
 }
 
@@ -389,7 +447,9 @@ ISSUE_KEYWORDS = {
 PRIORITY_MAP = {
     "High":   ["Refund", "Complaint", "Damaged/Wrong Item", "Missing Item"],
     "Medium": ["Delay", "Return", "Cancellation", "Payment Issue"],
-    "Low":    ["Product Inquiry", "Promotion Issue", "Technical Issue"],
+    # "Other" (no keyword matched any defined Issue Type) is explicitly Low
+    # priority — it should never be treated as urgent.
+    "Low":    ["Product Inquiry", "Promotion Issue", "Technical Issue", "Other"],
 }
 
 # ── High-priority escalation keywords (NEW) ───────────────────────────────────
