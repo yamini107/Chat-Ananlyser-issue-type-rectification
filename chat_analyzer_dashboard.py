@@ -263,11 +263,14 @@ ISSUE_KEYWORDS = {
         "print label", "restock fee", "unopened item", "unused item",
         "cara retur", "proses pengembalian", "ต้องคืนของยังไง",
         "ส่งของคืนยังไง", "นัดรับของคืน",
+        # NEW — Thai return/exchange phrasing from real "Other" data
+        "ได้สินค้าเก่า", "คืนได้มั้ย", "คืนได้ไหม", "คืนได้มั๊ย",
+        "เปลี่ยนสินค้า", "ขอเปลี่ยนสินค้า", "ขอเปลี่ยน",
     ],
     "Cancellation": [
         "cancel", "cancelled", "ยกเลิก", "batalkan", "batal", "cancellation",
         "cancel order", "ยกเลิกคำสั่งซื้อ", "revoke", "withdraw", "i cancelled",
-        "change address", "change size", "change color", "change mobile",
+        "change size", "change color", "change mobile",
         # NEW — reference keyword sheet additions
         "want to cancel", "how to cancel", "canceling", "cancelling", "pembatalan",
         "batalkan pesanan", "cancel my order", "stop order", "cancel purchase",
@@ -277,6 +280,23 @@ ISSUE_KEYWORDS = {
         "system cancelled", "order got cancelled", "why was my order cancelled",
         "unable to cancel", "can't cancel", "no cancel button",
         "tidak bisa batal", "ไม่สามารถยกเลิก", "ยกเลิกไม่ได้",
+    ],
+    "Address Change": [
+        # NEW: split out from Cancellation into its own Issue Type — buyers
+        # asking to fix/update a delivery address is a distinct, common
+        # request (confirmed frequent in real Thai chat data) that deserves
+        # its own category, reply template, and action steps rather than
+        # being bundled with order cancellations.
+        "change address", "update address", "update my address",
+        "change delivery address", "change shipping address", "wrong address",
+        "incorrect address", "update shipping address", "fix my address",
+        "change my address", "change my delivery address", "change my shipping address",
+        "update my delivery address", "update my shipping address",
+        "wrong delivery address", "incorrect delivery address", "edit my address",
+        "edit address", "correct my address", "address is wrong",
+        "alamat salah", "ubah alamat", "tukar alamat", "salah alamat",
+        "เปลี่ยนที่อยู่", "แก้ที่อยู่", "แก้ไขที่อยู่", "อัพเดทที่อยู่",
+        "ที่อยู่ผิด", "ส่งที่อยู่ผิด", "ส่งที่อยุ่ให้ไปผิด", "ที่อยู่ไม่ถูกต้อง",
     ],
     "Delay": [
         "delay", "late", "slow", "ช้า", "lambat", "belum sampai", "haven't received",
@@ -303,6 +323,14 @@ ISSUE_KEYWORDS = {
         "returned to sender", "failed delivery attempt", "courier didn't come",
         "driver did not arrive", "not yet dispatch", "belum dikirim",
         "belum di proses", "รอจัดส่ง", "พัสดุค้าง", "พัสดุไม่ขยับ",
+        # NEW — Thai delay/order-status phrasing from real "Other" data
+        "นานจัง", "ช้าจัง", "ส่งถึงมือผู้รับวันไหน", "จะได้รับวันไหน",
+        "ของที่ฉันสั่งอยู่ไหนแล้ว", "สั่งอยู่ไหนแล้ว", "จะได้รับสินค้าเมื่อไหร่",
+        "ติดตามคำสั่งซื้อ", "ติดตามพัสดุ", "ขอรับสินค้าวันที่",
+        # NEW — Tagalog and Chinese delay phrasing from real "Other" data
+        "ang tagal", "bakit ang tagal", "tagal na", "hindi pa dumating",
+        "kailan darating", "kailan po darating",
+        "什么时候发货", "什么时候到", "多久能到", "还没收到", "几时到",
     ],
     "Damaged/Wrong Item": [
         "wrong item", "wrong product", "damaged", "broken", "defective",
@@ -324,6 +352,8 @@ ISSUE_KEYWORDS = {
         "malfunctioning", "stitching came off", "peeling", "discoloured",
         "discolored", "scratched", "dirty item", "rusty", "barang rosak",
         "barang cacat", "สินค้ามีตำหนิ", "สินค้าเป็นรอย",
+        # NEW — Thai damaged/broken phrasing from real "Other" data
+        "พังไป", "พังแล้ว", "หัวปลอกพัง", "ใช้ไม่ได้เลย",
     ],
     "Missing Item": [
         "missing", "not received", "didn't receive", "never received",
@@ -356,6 +386,9 @@ ISSUE_KEYWORDS = {
         "payment pending", "still processing payment", "cod problem",
         "cash on delivery issue", "belum dapat resit", "หักเงินแล้วแต่ไม่ได้ออเดอร์",
         "เงินหักแล้วแต่ไม่มีออเดอร์",
+        # NEW — Thai payment phrasing from real "Other" data
+        "ตัดชำระซ้ำ", "ตัดเงินซ้ำ", "จ่ายเงินซ้ำ", "โอนเงินซ้ำ", "โอนซ้ำ",
+        "ขอใบเสร็จ", "ใบเสร็จ", "ขอใบกำกับภาษี",
     ],
     "Product Inquiry": [
         "how to", "how do", "วิธีใช้", "ราคา", "price", "size", "ขนาด",
@@ -382,6 +415,45 @@ ISSUE_KEYWORDS = {
         "machine wash", "care instructions", "how many pieces", "set of how many",
         "included in the box", "what's inside the box", "bahan apa",
         "cuci pakai apa", "ส่วนประกอบ", "ซักได้ไหม", "ผ้าอะไร",
+        # NEW — Thai product-inquiry phrasing identified from real "Other"
+        # conversations (restock timing, formula/version comparisons, usage
+        # instructions, ingredient/compatibility questions). This is, by
+        # far, the single largest driver of buyer messages that were
+        # falling through to "Other" — genuine product questions in Thai
+        # that none of the earlier (mostly English/formal-Thai) keywords
+        # were catching.
+        "จะมาอีกทีเมื่อไหร่", "มาเมื่อไหร่", "เมื่อไหร่จะมา", "จะมีเติม",
+        "มีเติมไหม", "มีเติมมั้ย", "มีเติมมั๊ย", "เติมสต๊อก", "เติมสต็อก",
+        "จะมีสินค้ามาเพิ่ม", "ผลิตในไทยหรือนำเข้า", "นำเข้าหรือผลิตในไทย",
+        "จะเติม", "เติมของ", "เติมวันไหน", "เติมเมื่อไหร่", "เข้ายังคะ",
+        # NEW — Chinese product-inquiry phrase found in real data
+        "有送", "多少钱",
+        "เหมือนกันมั้ย", "เหมือนกันไหม", "เหมือนกันมั๊ย", "เหมือนกันหรือป่าว",
+        "ใช่มั้ย", "ใช่ไหม", "ใช่ป่าว", "ใช่ปะ", "ใช่รึป่าว",
+        "ใช้ยังไง", "ใช้ไง", "ใช้ได้ไหม", "ใช้ได้มั้ย", "ใช้ได้มั๊ย",
+        "แพ็คเกจใหม่", "แพคเกจใหม่", "ต่างกันยังไง", "แตกต่างกันยังไง",
+        "ต่างจาก", "ต่างกันยังงัย", "สินค้าหมดหรือ", "หมดหรือคะ", "หมดหรอคะ",
+        "ของหมดหรือ", "ของหมดหรอ", "จะมีเข้ามาไหม", "จะเข้าไหม", "ยังไม่เข้าหรอ",
+        "หาไม่พบ", "ใช้กับเด็กอายุ", "ผิวแพ้ง่ายใช้ได้ไหม", "แพ้ง่ายใช้ได้ไหม",
+        "มีส่วนผสมอะไร", "ซื้อที่ไหน", "มีสินค้าไหม", "รุ่นเก่าหรือรุ่นใหม่",
+        "สูตรเก่าหรือใหม่", "สูตรเก่าหรือสูตรใหม่", "สูตรไหนกันน้ำ", "กันน้ำไหม",
+        "กันน้ำมั้ย", "ทากลางวันหรือกลางคืน", "เหนียวเหนอะหนะ", "ใส่คอนแทค",
+        "ใส่คอนเทค", "คอนแทคเลนส์", "คอนเทคเลนส์", "ของแท้ใช่ไหม", "ของแท้มั้ย",
+        "แท้ใช่ไหม", "เนื้อน้ำตบ", "เนื้อเป็นแบบไหน", "น้ำนมหรือน้ำใส",
+        "มีอะไหล่ขายไหม", "มีอีกตัวไหม", "มีเบสตัวไหน", "โฟมล้างหน้า",
+        "สูตรอ่อนโยน", "ทาก่อนหรือหลัง", "ก่อนรองพื้น", "หลังกันแดด",
+        "รุ่นนี้มั้ยคะ", "รุ่นนี้ไหมคะ", "ราคาเท่าไหร่", "ราคาเท่าไร",
+        # Generic Thai interrogative particles — deliberately added ONLY to
+        # this lowest-priority category. Scoring ties are broken in favor
+        # of higher-priority categories (see detect_issue_type), so these
+        # only tip the balance toward Product Inquiry when nothing more
+        # specific (Return/Refund/Payment/etc.) matches — i.e. exactly the
+        # ambiguous-but-clearly-a-question messages that were becoming
+        # "Other" despite being ordinary product questions.
+        "ไหมคะ", "ไหมครับ", "มั้ยคะ", "มั้ยครับ", "มั๊ยคะ", "มั๊ยครับ",
+        "หรอคะ", "หรอครับ", "เหรอคะ", "เหรอครับ", "ป่าวคะ", "ป่าวครับ",
+        "ยังไงคะ", "ยังไงครับ", "เท่าไหร่คะ", "เท่าไหร่ครับ",
+        "เมื่อไหร่คะ", "เมื่อไหร่ครับ", "ที่ไหนคะ", "ที่ไหนครับ",
     ],
     "Promotion Issue": [
         "voucher", "promo", "discount", "coupon", "code", "sale", "offer",
@@ -446,7 +518,7 @@ ISSUE_KEYWORDS = {
 # rules. High/Medium/Low buckets otherwise keep their previous membership.
 PRIORITY_MAP = {
     "High":   ["Refund", "Complaint", "Damaged/Wrong Item", "Missing Item"],
-    "Medium": ["Delay", "Return", "Cancellation", "Payment Issue"],
+    "Medium": ["Delay", "Return", "Cancellation", "Payment Issue", "Address Change"],
     # "Other" (no keyword matched any defined Issue Type) is explicitly Low
     # priority — it should never be treated as urgent.
     "Low":    ["Product Inquiry", "Promotion Issue", "Technical Issue", "Other"],
@@ -468,6 +540,7 @@ HIGH_PRIORITY_ESCALATION_KEYWORDS = [
     # Double charge
     "double charge", "charged twice", "double payment", "charged 2 times",
     "duplicate charge", "duplicate payment",
+    "ตัดชำระซ้ำ", "ตัดเงินซ้ำ", "จ่ายเงินซ้ำ", "โอนเงินซ้ำ", "โอนซ้ำ",
     # Account hacked / security
     "account hacked", "account was hacked", "hacked my account", "hacked",
     "unauthorized access", "unauthorised access", "someone accessed my account",
@@ -655,6 +728,14 @@ SUGGESTED_REPLIES = {
         "If you change your mind or need assistance with a future purchase, we're always here to help. 😊\n\n"
         "We'd appreciate your feedback — how was your experience with our team today?"
     ),
+    "Address Change": (
+        "Thank you for letting us know about the delivery address for order [ORDER_ID]. "
+        "If the order hasn't been shipped yet, we can update it to [NEW_ADDRESS] right away. "
+        "If it has already been dispatched, we'll coordinate with our logistics partner to redirect "
+        "the package where possible, or arrange a return-and-reship if needed. "
+        "We'll confirm the updated status with you shortly. 😊\n\n"
+        "How was your experience with our support team today?"
+    ),
     "Delay": (
         "Thank you for your patience, and we sincerely apologise for the delay with your order [ORDER_ID]. "
         "We've checked with our logistics partner and your package is currently [STATUS]. "
@@ -758,6 +839,15 @@ ACTION_STEPS = {
         "3. If already shipped, advise buyer to reject delivery.\n"
         "4. Refund will auto-process within 3–5 business days.\n"
         "5. Log in DKSH tracker under 'Cancellation Cases'."
+    ),
+    "Address Change": (
+        "1. Check order status — address can only be updated before 'Ready to Ship'.\n"
+        "2. If eligible, update the delivery address in Seller Centre / order details.\n"
+        "3. If already shipped, contact the logistics partner to attempt redirection.\n"
+        "4. If redirection isn't possible, arrange return-to-sender and reship to the "
+        "corrected address once returned.\n"
+        "5. Confirm the updated address and new ETA with the buyer.\n"
+        "6. Log in DKSH tracker under 'Address Change Cases'."
     ),
     "Delay": (
         "1. Check logistics tracking in Seller Centre → Order Details.\n"
@@ -922,7 +1012,9 @@ def _extract_from_obj(obj, depth: int = 0, permissive: bool = False) -> str:
                     try:
                         inner = _extract_from_obj(json.loads(val), depth + 1, permissive=True)
                     except (json.JSONDecodeError, ValueError):
-                        inner = ""
+                        # Truncated/malformed nested JSON — recover whatever
+                        # partial text is still there instead of giving up.
+                        inner = _regex_extract_text(val)
                     if inner:
                         return inner
                     continue
@@ -941,7 +1033,12 @@ def _extract_from_obj(obj, depth: int = 0, permissive: bool = False) -> str:
                     if found:
                         return found
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    # Truncated/malformed nested JSON (e.g. a Lazada "ext"
+                    # blob cut off mid-string) — recover whatever partial
+                    # text is still recoverable instead of giving up.
+                    found = _regex_extract_text(val)
+                    if found:
+                        return found
             elif isinstance(val, (dict, list)):
                 found = _extract_from_obj(val, depth + 1, permissive=True)
                 if found:
@@ -965,12 +1062,29 @@ def _extract_from_obj(obj, depth: int = 0, permissive: bool = False) -> str:
 
 
 def _regex_extract_text(s: str) -> str:
-    """Fallback: extract quoted text values from a JSON-like string via regex."""
+    """
+    Fallback: extract quoted text values from a JSON-like string via regex.
+
+    CRITICAL FIX: a large share of buyer messages in the source export are
+    truncated at a fixed character limit (observed: ~100 chars), which cuts
+    the JSON off mid-string with no closing quote — e.g.
+    '{"txt":"hi i ordered PUMA shuffle shoes US 9.5 size. Please pack the...'
+    (no trailing '"' or '}'). json.loads() correctly fails on this, and the
+    OLD regex here required a closing '"' too, so it also returned "" —
+    meaning every truncated message came back completely empty and was
+    unavoidably classified as "Other", regardless of how good the keyword
+    list was. This was, by volume, the single largest cause of "Other".
+
+    The regex below still prefers a normal closing quote when present, but
+    falls back to capturing through end-of-string when the message was cut
+    off before a closing quote appears, recovering the truncated-but-still
+    meaningful partial text instead of discarding it.
+    """
     # Match values for common text-ish keys (same set as _TEXT_FIELD_NAMES)
     m = re.search(
         r'"(?:txt|text|content|message|body|caption|desc|description|msg|'
-        r'summary|content_text|message_text)"\s*:\s*"([^"]{2,})"',
-        s, re.IGNORECASE,
+        r'summary|content_text|message_text)"\s*:\s*"([^"]{2,})(?:"|$)',
+        s, re.IGNORECASE | re.DOTALL,
     )
     if m:
         return m.group(1).replace("\\n", " ").replace('\\"', '"').strip()
